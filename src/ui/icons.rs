@@ -32,6 +32,8 @@ pub const SIGN_OUT: &str = "\u{fc0c}"; // sign-out-alt
 pub const TIME_PAST: &str = "\u{fdaa}"; // time-past
 pub const TRASH: &str = "\u{fe17}"; // trash
 pub const USER: &str = "\u{fea0}"; // user
+pub const USER_ADD: &str = "\u{fe7a}"; // user-add
+pub const USERS: &str = "\u{fea6}"; // users
 
 /// One icon glyph; size and color follow the surrounding text (chain `.text_*()` to change them).
 pub fn icon(glyph: &'static str) -> Div {

@@ -52,6 +52,8 @@ do $$ begin
   assert (select count(*) from public.profiles) = 2, 'bob sees himself and alice (shared group), not carol';
   update public.tasks set status = 'in_progress', updated_at = '2026-01-03T00:00:00Z' where id = '10000000-0000-0000-0000-000000000002';
   assert (select status from public.tasks where id = '10000000-0000-0000-0000-000000000002') = 'in_progress', 'member can update group task';
+  assert public.upsert_task('{"id":"10000000-0000-0000-0000-000000000002","group_id":"20000000-0000-0000-0000-000000000001","assignee_id":"00000000-0000-0000-0000-0000000000b2","title":"Group task (bob)","status":"in_progress","updated_at":"2026-01-04T00:00:00Z"}'::jsonb) = true, 'member can sync a group task through the rpc';
+  assert (select owner_id from public.tasks where id = '10000000-0000-0000-0000-000000000002') = '00000000-0000-0000-0000-0000000000a1', 'rpc keeps the owner';
   delete from public.tasks where id = '10000000-0000-0000-0000-000000000002';
   assert (select count(*) from public.tasks where id = '10000000-0000-0000-0000-000000000002') = 1, 'member cannot delete a group task he does not own';
   delete from public.groups where id = '20000000-0000-0000-0000-000000000001';

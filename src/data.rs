@@ -1,6 +1,6 @@
 //! The persisted document and every operation on it. Pure: no GPUI, no I/O.
 
-use crate::model::{Notice, PendingOp, Priority, Profile, Reminder, Repeat, Settings, Status, SubTask, Task};
+use crate::model::{Group, Notice, PendingOp, Priority, Profile, Reminder, Repeat, Settings, Status, SubTask, Task};
 use crate::reminders;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,10 @@ pub struct Data {
     /// Tasks known to exist on the server (as of the last pull or upload).
     pub remote_ids: Vec<Uuid>,
     pub last_sync: Option<DateTime<Utc>>,
+    /// Groups the account belongs to, as of the last sync.
+    pub groups: Vec<Group>,
+    /// People who share a group with the account (names and avatars), as of the last sync.
+    pub profiles: Vec<Profile>,
 }
 
 impl Default for Data {
@@ -46,6 +50,8 @@ impl Default for Data {
             pending: Vec::new(),
             remote_ids: Vec::new(),
             last_sync: None,
+            groups: Vec::new(),
+            profiles: Vec::new(),
         }
     }
 }
@@ -71,6 +77,8 @@ pub struct TaskDraft {
     pub reminder: Option<(DateTime<Utc>, Repeat)>,
     pub tags: Vec<String>,
     pub subtasks: Vec<SubTask>,
+    pub group_id: Option<Uuid>,
+    pub assignee_id: Option<Uuid>,
 }
 
 impl TaskDraft {
@@ -84,6 +92,8 @@ impl TaskDraft {
             reminder: t.reminder.as_ref().filter(|r| r.enabled).map(|r| (r.next_trigger, r.repeat)),
             tags: t.tags.clone(),
             subtasks: t.subtasks.clone(),
+            group_id: t.group_id,
+            assignee_id: t.assignee_id,
         }
     }
 }
@@ -108,6 +118,28 @@ impl Data {
         self.tasks.iter().find(|t| t.id == id)
     }
 
+    /// The signed-in account's id.
+    pub fn me(&self) -> Option<Uuid> {
+        self.account.as_ref().map(|a| a.id)
+    }
+
+    pub fn group(&self, id: Uuid) -> Option<&Group> {
+        self.groups.iter().find(|g| g.id == id)
+    }
+
+    /// Name and avatar of a user: the account itself or someone sharing a group with it.
+    pub fn profile(&self, id: Uuid) -> Option<&Profile> {
+        self.account.iter().chain(&self.profiles).find(|p| p.id == id)
+    }
+
+    /// Reminders ring for the task's owner and assignee only; without an account, for every task.
+    fn reminds_me(&self, t: &Task) -> bool {
+        match self.me() {
+            None => true,
+            Some(me) => t.owner_id.is_none_or(|owner| owner == me) || t.assignee_id == Some(me),
+        }
+    }
+
     fn task_mut(&mut self, id: Uuid) -> Result<&mut Task, DataError> {
         self.tasks.iter_mut().find(|t| t.id == id).ok_or(DataError::NotFound)
     }
@@ -130,8 +162,8 @@ impl Data {
             created_at: now,
             updated_at: now,
             owner_id: None,
-            group_id: None,
-            assignee_id: None,
+            group_id: draft.group_id,
+            assignee_id: draft.group_id.and(draft.assignee_id),
         };
         let id = task.id;
         self.tasks.push(task);
@@ -157,6 +189,8 @@ impl Data {
         task.reminder = reminder;
         task.tags = clean_tags(draft.tags);
         task.subtasks = draft.subtasks;
+        task.group_id = draft.group_id;
+        task.assignee_id = draft.group_id.and(draft.assignee_id);
         task.updated_at = now;
         Ok(())
     }
@@ -216,12 +250,18 @@ impl Data {
 
     /// Cheap check so the reminder loop only saves when something fires.
     pub fn has_due_reminders(&self, now: DateTime<Utc>) -> bool {
-        !reminders::due_now(&self.tasks, now).is_empty()
+        !self.due_reminders(now).is_empty()
+    }
+
+    fn due_reminders(&self, now: DateTime<Utc>) -> Vec<Uuid> {
+        let mut due = reminders::due_now(&self.tasks, now);
+        due.retain(|id| self.task(*id).is_some_and(|t| self.reminds_me(t)));
+        due
     }
 
     /// Advances every due reminder and returns snapshots of the tasks to notify about.
     pub fn fire_due_reminders(&mut self, now: DateTime<Utc>) -> Vec<Task> {
-        let due = reminders::due_now(&self.tasks, now);
+        let due = self.due_reminders(now);
         let mut fired = Vec::new();
         for task in self.tasks.iter_mut().filter(|t| due.contains(&t.id)) {
             fired.push(task.clone());
@@ -288,10 +328,31 @@ impl Data {
         matches!((&self.account, self.last_account), (Some(account), Some(last)) if account.id != last)
     }
 
+    /// After signing out: keeps the account's own tasks (and their waiting uploads) for the next
+    /// sign-in; other people's group tasks and the group directory go.
+    pub fn forget_account(&mut self) {
+        let mine = self.me().or(self.last_account);
+        self.account = None;
+        self.keep_only_tasks_of(mine);
+        self.groups.clear();
+        self.profiles.clear();
+    }
+
+    fn keep_only_tasks_of(&mut self, owner: Option<Uuid>) {
+        let others: HashSet<Uuid> =
+            self.tasks.iter().filter(|t| t.owner_id.is_some() && t.owner_id != owner).map(|t| t.id).collect();
+        self.tasks.retain(|t| !others.contains(&t.id));
+        self.pending.retain(|op| !others.contains(&op.id()));
+        self.remote_ids.retain(|id| !others.contains(id));
+    }
+
     /// Answers `needs_account_choice`: copy the local tasks into the signed-in account (with new
     /// ids, so they do not collide with the other account's copies) or remove them from this device.
     pub fn adopt_local_tasks(&mut self, copy: bool) {
-        let Some(id) = self.account.as_ref().map(|a| a.id) else { return };
+        let Some(id) = self.me() else { return };
+        self.keep_only_tasks_of(self.last_account);
+        self.groups.clear();
+        self.profiles.clear();
         self.start_over(id);
         if !copy {
             self.tasks.clear();
@@ -316,7 +377,8 @@ impl Data {
     /// Applies a sync turn: finished uploads leave the queue (unless the task changed again during
     /// the turn), then the server's tasks replace local ones that have nothing waiting, and tasks
     /// deleted on the server go away here too. `remote` is `None` when the pull did not get through.
-    pub fn merge_sync(&mut self, sent: &[Sent], remote: Option<Vec<Task>>, now: DateTime<Utc>) {
+    /// Returns the tasks someone else newly assigned to the account (none on the first pull).
+    pub fn merge_sync(&mut self, sent: &[Sent], remote: Option<Vec<Task>>, now: DateTime<Utc>) -> Vec<Uuid> {
         for done in sent {
             match done.op {
                 PendingOp::Upsert(id) => {
@@ -341,7 +403,10 @@ impl Data {
                 }
             }
         }
-        let Some(remote) = remote else { return };
+        let Some(remote) = remote else { return Vec::new() };
+        let me = self.me();
+        let first_pull = self.last_sync.is_none();
+        let mut assigned = Vec::new();
         let waiting: HashSet<Uuid> = self.pending.iter().map(|op| op.id()).collect();
         let on_server: HashSet<Uuid> = remote.iter().map(|t| t.id).collect();
         let known = &self.remote_ids;
@@ -349,6 +414,11 @@ impl Data {
         for task in remote {
             if waiting.contains(&task.id) {
                 continue;
+            }
+            let local = self.tasks.iter().find(|t| t.id == task.id);
+            let newly_mine = me.is_some() && task.assignee_id == me && local.is_none_or(|l| l.assignee_id != me);
+            if newly_mine && !first_pull && task.owner_id != me {
+                assigned.push(task.id);
             }
             match self.tasks.iter_mut().find(|t| t.id == task.id) {
                 Some(local) => *local = task,
@@ -359,6 +429,7 @@ impl Data {
         self.remote_ids = on_server.into_iter().collect();
         self.remote_ids.sort();
         self.last_sync = Some(now);
+        assigned
     }
 }
 

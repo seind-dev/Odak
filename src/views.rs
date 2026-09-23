@@ -2,17 +2,28 @@
 
 use crate::model::{Priority, Status, Task};
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, Timelike, Utc};
+use uuid::Uuid;
 
 pub const MONTHS_TR: [&str; 12] = [
     "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık",
 ];
 pub const WEEKDAYS_TR: [&str; 7] = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"];
 
+/// Which tasks the list shows by group.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Scope {
+    #[default]
+    All,
+    Personal,
+    Group(Uuid),
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ListFilter {
     pub priority: Option<Priority>,
     pub tag: Option<String>,
     pub query: String,
+    pub scope: Scope,
 }
 
 pub fn filter_tasks<'a>(tasks: &'a [Task], f: &ListFilter) -> Vec<&'a Task> {
@@ -21,6 +32,11 @@ pub fn filter_tasks<'a>(tasks: &'a [Task], f: &ListFilter) -> Vec<&'a Task> {
         .iter()
         .filter(|t| f.priority.is_none_or(|p| t.priority == p))
         .filter(|t| f.tag.as_ref().is_none_or(|tag| t.tags.contains(tag)))
+        .filter(|t| match f.scope {
+            Scope::All => true,
+            Scope::Personal => t.group_id.is_none(),
+            Scope::Group(id) => t.group_id == Some(id),
+        })
         .filter(|t| {
             query.is_empty()
                 || t.title.to_lowercase().contains(&query)
@@ -35,6 +51,11 @@ pub fn all_tags(tasks: &[Task]) -> Vec<String> {
     tags.sort();
     tags.dedup();
     tags
+}
+
+/// Open tasks assigned to `me` (Dashboard).
+pub fn assigned_to(tasks: &[Task], me: Uuid) -> Vec<&Task> {
+    tasks.iter().filter(|t| t.assignee_id == Some(me) && t.status != Status::Completed).collect()
 }
 
 pub fn with_status(tasks: &[Task], status: Status) -> Vec<&Task> {

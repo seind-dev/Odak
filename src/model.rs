@@ -111,6 +111,8 @@ pub enum NoticeKind {
     Reminder,
     Alert,
     Update,
+    /// Something another member did: an assignment or a comment.
+    Shared,
 }
 
 /// A notification that was shown as a pop-up, kept for the Bildirimler page.
@@ -186,6 +188,17 @@ impl PendingOp {
             PendingOp::Upsert(id) | PendingOp::Delete(id) => id,
         }
     }
+}
+
+/// A shared group and the ids of its members (the owner included).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Group {
+    pub id: Uuid,
+    pub name: String,
+    pub owner_id: Uuid,
+    #[serde(default)]
+    pub members: Vec<Uuid>,
 }
 
 /// A user as shown in the app, from the `profiles` table (display only, never for access checks).

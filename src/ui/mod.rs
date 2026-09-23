@@ -12,3 +12,4 @@ pub mod icons;
 pub mod markdown;
 pub mod palette;
 pub mod notifications;
+pub mod groups;

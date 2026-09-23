@@ -1,8 +1,9 @@
 //! Small stateless building blocks. Stateful widgets live in text_input.rs and datetime_picker.rs.
 
 use crate::account;
+use crate::data::Data;
 use crate::fonts;
-use crate::model::Profile;
+use crate::model::{Profile, Task};
 use crate::state::{AppState, Auth, SyncStatus};
 use crate::theme::Colors;
 use crate::ui::icons::{self, icon};
@@ -55,6 +56,52 @@ pub fn avatar(profile: &Profile, size: Pixels, c: &Colors) -> Div {
     div().flex_none().size(size).child(
         img(account::avatar_path(profile.id)).size_full().rounded_full().with_loading(letter.clone()).with_fallback(letter),
     )
+}
+
+/// Avatar of any user the app knows about (see `Data::profile`); "?" for someone unknown.
+pub fn user_avatar(data: &Data, id: Uuid, size: Pixels, c: &Colors) -> Div {
+    match data.profile(id) {
+        Some(profile) => avatar(profile, size, c),
+        None => avatar(&Profile { id, username: String::new(), display_name: String::new(), avatar_url: None }, size, c),
+    }
+}
+
+pub fn user_name(data: &Data, id: Uuid) -> String {
+    data.profile(id).map_or_else(|| "Bilinmeyen üye".into(), |p| if p.name().is_empty() { "Discord hesabı".into() } else { p.name().to_string() })
+}
+
+/// Group badge and assignee avatar of a task card (nothing for personal tasks).
+pub fn sharing_badges(data: &Data, t: &Task, c: &Colors) -> Vec<AnyElement> {
+    let group = t.group_id.and_then(|id| data.group(id));
+    let mut badges: Vec<AnyElement> = Vec::new();
+    if let Some(group) = group {
+        badges.push(icon_chip(icons::USERS, group.name.clone(), c.accent).into_any_element());
+    }
+    if let Some(assignee) = t.assignee_id {
+        badges.push(user_avatar(data, assignee, px(18.), c).into_any_element());
+    }
+    badges
+}
+
+/// Selectable rounded option (group and assignee pickers); chain `.child(...)` and `.on_click(...)`.
+pub fn pill(id: impl Into<ElementId>, selected: bool, c: &Colors) -> Stateful<Div> {
+    let hover = c.hover;
+    div()
+        .id(id)
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap_1p5()
+        .px_3()
+        .py_1()
+        .rounded_full()
+        .border_1()
+        .text_sm()
+        .cursor_pointer()
+        .when(selected, |d| d.bg(c.accent).border_color(c.accent).text_color(white()))
+        .when(!selected, |d| d.border_color(c.border).text_color(c.text))
+        // Always attached (see `segmented`).
+        .hover(move |s| if selected { s } else { s.bg(hover) })
 }
 
 /// Cloud glyph and text for the sync state (sidebar and Settings); `None` without an account.

@@ -1,6 +1,6 @@
 //! Thin Supabase client (Auth and REST) on blocking `ureq` calls: run them off the main thread.
 
-use crate::model::{Priority, Profile, Reminder, Status, SubTask, Task};
+use crate::model::{Group, Priority, Profile, Reminder, Status, SubTask, Task};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
@@ -230,6 +230,79 @@ pub fn fetch_tasks(session: &Session) -> Result<Vec<Task>, Error> {
     let request = authorized(AGENT.get(endpoint("/rest/v1/tasks")), session).query("select", "*");
     let rows: Vec<TaskRow> = read_json(request.call())?;
     Ok(rows.into_iter().map(Task::from).collect())
+}
+
+#[derive(Deserialize)]
+struct GroupRow {
+    id: Uuid,
+    name: String,
+    owner_id: Uuid,
+    #[serde(default)]
+    group_members: Vec<MemberRow>,
+}
+
+#[derive(Deserialize)]
+struct MemberRow {
+    user_id: Uuid,
+}
+
+impl From<GroupRow> for Group {
+    fn from(r: GroupRow) -> Self {
+        let members = r.group_members.into_iter().map(|m| m.user_id).collect();
+        Group { id: r.id, name: r.name, owner_id: r.owner_id, members }
+    }
+}
+
+/// The account's groups with their members.
+pub fn fetch_groups(session: &Session) -> Result<Vec<Group>, Error> {
+    let request = authorized(AGENT.get(endpoint("/rest/v1/groups")), session)
+        .query("select", "id,name,owner_id,group_members(user_id)")
+        .query("order", "created_at");
+    let rows: Vec<GroupRow> = read_json(request.call())?;
+    Ok(rows.into_iter().map(Group::from).collect())
+}
+
+/// The account and everyone who shares a group with it.
+pub fn fetch_profiles(session: &Session) -> Result<Vec<Profile>, Error> {
+    let request = authorized(AGENT.get(endpoint("/rest/v1/profiles")), session).query("select", "id,username,display_name,avatar_url");
+    read_json(request.call())
+}
+
+pub fn create_group(session: &Session, name: &str) -> Result<Group, Error> {
+    let request = authorized(AGENT.post(endpoint("/rest/v1/groups")), session)
+        .header("Prefer", "return=representation")
+        .query("select", "id,name,owner_id");
+    let rows: Vec<GroupRow> = read_json(request.send_json(json!({ "name": name })))?;
+    let row = rows.into_iter().next().ok_or_else(|| Error::Local("Grup oluşturulamadı".into()))?;
+    // The server adds the owner as the first member.
+    Ok(Group { members: vec![row.owner_id], ..Group::from(row) })
+}
+
+/// Looks a user up by exact Discord username (case-insensitive). `None`: nobody by that name has
+/// signed in to Odak yet.
+pub fn find_profile(session: &Session, username: &str) -> Result<Option<Profile>, Error> {
+    let request = authorized(AGENT.post(endpoint("/rest/v1/rpc/find_profile_by_discord_name")), session);
+    let rows: Vec<Profile> = read_json(request.send_json(json!({ "name": username })))?;
+    Ok(rows.into_iter().next())
+}
+
+pub fn add_member(session: &Session, group: Uuid, user: Uuid) -> Result<(), Error> {
+    let request = authorized(AGENT.post(endpoint("/rest/v1/group_members")), session);
+    check(request.send_json(json!({ "group_id": group, "user_id": user }))).map(drop)
+}
+
+/// Removes a member, or the account itself when leaving.
+pub fn remove_member(session: &Session, group: Uuid, user: Uuid) -> Result<(), Error> {
+    let request = authorized(AGENT.delete(endpoint("/rest/v1/group_members")), session)
+        .query("group_id", format!("eq.{group}"))
+        .query("user_id", format!("eq.{user}"));
+    check(request.call()).map(drop)
+}
+
+/// Deletes a group with its tasks (owner only).
+pub fn delete_group(session: &Session, group: Uuid) -> Result<(), Error> {
+    let request = authorized(AGENT.delete(endpoint("/rest/v1/groups")), session).query("id", format!("eq.{group}"));
+    check(request.call()).map(drop)
 }
 
 /// Downloads a file from anywhere (avatars).

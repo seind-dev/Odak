@@ -5,11 +5,17 @@ use crate::model::{Priority, Repeat, Status, SubTask};
 use crate::state::{AppState, Page};
 use crate::theme::{self, Colors};
 use crate::ui::datetime_picker::DateTimePicker;
+use crate::ui::icons;
 use crate::ui::markdown;
 use crate::ui::text_input::{TextEvent, TextInput};
-use crate::ui::widgets::{button, checkbox, chip, field, page_title, primary_button, segmented};
+use crate::ui::widgets::{
+    button, checkbox, chip, field, icon_chip, page_title, pill, primary_button, segmented, user_avatar, user_name,
+};
 use chrono::Utc;
-use gpui::{App, Context, Entity, FocusHandle, Focusable, FontWeight, IntoElement, Render, Subscription, Window, div, prelude::*, px};
+use gpui::{
+    App, Context, Div, Entity, FocusHandle, Focusable, FontWeight, IntoElement, Render, Subscription, Window, div, prelude::*,
+    px,
+};
 use uuid::Uuid;
 
 pub struct FormPage {
@@ -26,6 +32,9 @@ pub struct FormPage {
     repeat: Repeat,
     tags: Vec<String>,
     subtasks: Vec<SubTask>,
+    /// `None`: a personal task.
+    group: Option<Uuid>,
+    assignee: Option<Uuid>,
     error: Option<String>,
     /// Description shows rendered Markdown instead of the editor.
     preview: bool,
@@ -83,6 +92,8 @@ impl FormPage {
             repeat: draft.reminder.map_or(Repeat::Once, |(_, repeat)| repeat),
             tags: draft.tags,
             subtasks: draft.subtasks,
+            group: draft.group_id,
+            assignee: draft.assignee_id,
             error: None,
             preview: false,
             _subscriptions: subscriptions,
@@ -127,6 +138,8 @@ impl FormPage {
             reminder: self.reminder.read(cx).value().map(|at| (at, self.repeat)),
             tags: self.tags.clone(),
             subtasks: self.subtasks.clone(),
+            group_id: self.group,
+            assignee_id: self.assignee,
         };
         if draft.title.trim().is_empty() {
             self.error = Some(DataError::EmptyTitle.to_string());
@@ -148,6 +161,73 @@ impl FormPage {
                 cx.notify();
             }
         }
+    }
+
+    /// Moves the task to a group (or back to personal); an assignee outside the group is cleared.
+    fn set_group(&mut self, group: Option<Uuid>, cx: &mut Context<Self>) {
+        let data = &AppState::global(cx).read(cx).data;
+        let members = group.and_then(|g| data.group(g)).map(|g| g.members.clone()).unwrap_or_default();
+        self.group = group;
+        self.assignee = self.assignee.filter(|a| members.contains(a));
+        cx.notify();
+    }
+
+    /// Group and assignee pickers; `None` when the account has no groups (nothing to pick).
+    fn sharing_fields(&self, c: &Colors, cx: &Context<Self>) -> Option<Div> {
+        let data = &AppState::global(cx).read(cx).data;
+        if data.groups.is_empty() && self.group.is_none() {
+            return None;
+        }
+        // Only the owner may move a task between groups (the server enforces it too).
+        let owner = self.editing.and_then(|id| data.task(id)).and_then(|t| t.owner_id);
+        let can_move = owner.is_none() || owner == data.me();
+        let group_name = |id: Uuid| data.group(id).map_or_else(|| "Grup".to_string(), |g| g.name.clone());
+        let group_picker = if can_move {
+            let options = std::iter::once((None, "Kişisel".to_string()))
+                .chain(data.groups.iter().map(|g| (Some(g.id), g.name.clone())));
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1p5()
+                .children(options.enumerate().map(|(ix, (id, name))| {
+                    pill(("group", ix), self.group == id, c)
+                        .when(id.is_some(), |d| d.child(icons::icon(icons::USERS)))
+                        .child(name)
+                        .on_click(cx.listener(move |this, _, _, cx| this.set_group(id, cx)))
+                }))
+                .into_any_element()
+        } else {
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(icon_chip(icons::USERS, self.group.map_or("Kişisel".into(), group_name), c.accent))
+                .child(div().text_xs().text_color(c.muted).child("Grubu yalnızca görevin sahibi değiştirebilir"))
+                .into_any_element()
+        };
+        let members = self.group.and_then(|g| data.group(g)).map(|g| g.members.clone()).unwrap_or_default();
+        let assignee_picker = self.group.is_some().then(|| {
+            let options = std::iter::once(None).chain(members.iter().copied().map(Some));
+            div().flex().flex_wrap().gap_1p5().children(options.enumerate().map(|(ix, id)| {
+                pill(("assignee", ix), self.assignee == id, c)
+                    .map(|d| match id {
+                        Some(id) => d.child(user_avatar(data, id, px(18.), c)).child(user_name(data, id)),
+                        None => d.child("Kimse"),
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.assignee = id;
+                        cx.notify();
+                    }))
+            }))
+        });
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_5()
+                .child(field("Grup", group_picker, c))
+                .when_some(assignee_picker, |d, picker| d.child(field("Atanan", picker, c))),
+        )
     }
 
     fn subtask_row(&self, ix: usize, s: &SubTask, c: &Colors, cx: &Context<Self>) -> impl IntoElement {
@@ -276,6 +356,7 @@ impl Render for FormPage {
                 .child(field("Başlık", self.title.clone(), &c))
                 .child(description)
                 .child(field("Öncelik", priority, &c))
+                .when_some(self.sharing_fields(&c, cx), |d, fields| d.child(fields))
                 .when(self.editing.is_some(), |d| d.child(field("Durum", status, &c)))
                 .child(field("Son tarih", self.due.clone(), &c))
                 .child(field(

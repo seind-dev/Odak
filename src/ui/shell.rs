@@ -9,7 +9,8 @@ use crate::ui::icons::{self, icon};
 use crate::ui::palette::{PaletteEvent, SearchPalette};
 use crate::ui::widgets::sync_label;
 use crate::ui::{
-    calendar::CalendarPage, dashboard, form::FormPage, kanban, list::ListPage, notifications, settings::SettingsPage,
+    calendar::CalendarPage, dashboard, form::FormPage, groups::GroupsPage, kanban, list::ListPage, notifications,
+    settings::SettingsPage,
 };
 use crate::views;
 use chrono::Utc;
@@ -60,6 +61,7 @@ pub struct Shell {
     focus: FocusHandle,
     list: Entity<ListPage>,
     calendar: Entity<CalendarPage>,
+    groups: Entity<GroupsPage>,
     settings: Entity<SettingsPage>,
     form: Option<Entity<FormPage>>,
     palette: Option<Entity<SearchPalette>>,
@@ -79,6 +81,7 @@ impl Shell {
         let mut shell = Shell {
             list: cx.new(ListPage::new),
             calendar: cx.new(CalendarPage::new),
+            groups: cx.new(GroupsPage::new),
             settings: cx.new(SettingsPage::new),
             form: None,
             palette: None,
@@ -147,6 +150,7 @@ impl Shell {
             (Page::List, icons::LIST, "Görevler", ""),
             (Page::Kanban, icons::KANBAN, "Kanban", "Ctrl+B"),
             (Page::Calendar, icons::CALENDAR, "Takvim", "Ctrl+L"),
+            (Page::Groups, icons::USERS, "Gruplar", ""),
             (Page::Notifications, icons::BELL, "Bildirimler", ""),
             (Page::Form, icons::ADD, "Yeni Görev", "Ctrl+N"),
             (Page::Settings, icons::SETTINGS, "Ayarlar", "Ctrl+,"),
@@ -341,6 +345,7 @@ impl Render for Shell {
             Page::List => self.list.clone().into_any_element(),
             Page::Kanban => kanban::render(&c, cx).into_any_element(),
             Page::Calendar => self.calendar.clone().into_any_element(),
+            Page::Groups => self.groups.clone().into_any_element(),
             Page::Settings => self.settings.clone().into_any_element(),
             Page::Notifications => notifications::render(&c, cx).into_any_element(),
             Page::Form => match &self.form {

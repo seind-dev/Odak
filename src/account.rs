@@ -27,6 +27,52 @@ pub fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) ->
     rx
 }
 
+/// Runs an online-only request (group management) with a fresh session, off the main thread, then
+/// calls `done` on the main thread. Not signed in or offline: `done` gets the error.
+pub fn online<T: Send + 'static>(
+    cx: &mut App,
+    work: impl FnOnce(&Session) -> Result<T, Error> + Send + 'static,
+    done: impl FnOnce(Result<T, Error>, &mut App) + 'static,
+) {
+    let Auth::SignedIn(session) = &AppState::global(cx).read(cx).auth else {
+        return done(Err(Error::Local("Bu işlem için giriş yapmalısın.".into())), cx);
+    };
+    let session = session.clone();
+    let result = blocking(move || {
+        if !session.needs_refresh(Utc::now()) {
+            return (None, work(&session));
+        }
+        match supabase::refresh(&session.refresh_token) {
+            Ok(fresh) => {
+                keep_session(&fresh);
+                let result = work(&fresh);
+                (Some(fresh), result)
+            }
+            Err(e) => (None, Err(e)),
+        }
+    });
+    cx.spawn(async move |cx| {
+        let Ok((fresh, result)) = result.await else { return };
+        cx.update(|cx| {
+            if let Some(fresh) = fresh {
+                AppState::global(cx).update(cx, |s, _| {
+                    if let Auth::SignedIn(current) = &mut s.auth
+                        && current.user_id == fresh.user_id
+                    {
+                        *current = fresh;
+                    }
+                });
+            }
+            let result = result.map_err(|e| match e {
+                Error::Network(_) => Error::Local("Bu işlem için internet gerekli.".into()),
+                e => e,
+            });
+            done(result, cx);
+        });
+    })
+    .detach();
+}
+
 /// At startup: signed in again with the saved refresh token, offline too. The first sync turn
 /// refreshes the session; if the server rejects it, Settings asks to sign in again.
 pub fn restore(cx: &mut App) {
@@ -125,7 +171,7 @@ fn adopt(session: Session, profile: Option<Profile>, expected: impl Fn(&Auth) ->
         });
         s.auth = Auth::SignedIn(session.clone());
         s.auth_error = None;
-        s.mutate(cx, |d| {
+        s.apply_remote(cx, |d| {
             d.account = Some(account);
             d.bind_account(id);
         });
@@ -174,7 +220,8 @@ pub fn sign_out(cx: &mut App) {
         s.auth_error = None;
         s.confirm_sign_out = false;
         s.sync = SyncStatus::Idle;
-        s.mutate(cx, |d| d.account = None);
+        // Not `mutate`: dropping other people's tasks here must not delete them on the server.
+        s.apply_remote(cx, |d| d.forget_account());
         match std::mem::replace(&mut s.auth, Auth::SignedOut) {
             Auth::SignedIn(session) => Some(session),
             _ => None,
@@ -222,7 +269,7 @@ pub fn avatar_path(id: Uuid) -> PathBuf {
 }
 
 /// Downloads the avatar as a small static PNG. Best effort: the UI falls back to initials.
-fn cache_avatar(profile: &Profile) {
+pub fn cache_avatar(profile: &Profile) {
     let Some(url) = profile.avatar_url.as_deref().filter(|u| !u.is_empty()) else { return };
     // Discord serves animated avatars as .gif; the .png variant is the static first frame.
     let url = format!("{}?size=128", url.strip_suffix(".gif").map(|u| format!("{u}.png")).as_deref().unwrap_or(url));

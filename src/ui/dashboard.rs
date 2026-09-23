@@ -12,9 +12,11 @@ use gpui::{App, Entity, FontWeight, IntoElement, Rgba, div, prelude::*, px};
 
 pub fn render(c: &Colors, cx: &App) -> impl IntoElement {
     let state = AppState::global(cx);
-    let tasks = &state.read(cx).data.tasks;
+    let data = &state.read(cx).data;
+    let tasks = &data.tasks;
     let now = Utc::now();
     let s = views::stats(tasks, now);
+    let mine = data.me().map(|me| views::assigned_to(tasks, me));
     div().id("dashboard").size_full().overflow_y_scroll().child(
         div()
             .p_6()
@@ -50,7 +52,10 @@ pub fn render(c: &Colors, cx: &App) -> impl IntoElement {
                         &state,
                         c,
                     )),
-            ),
+            )
+            .when_some(mine, |d, mine| {
+                d.child(section("Bana atananlar", mine, "Sana atanmış açık görev yok.", &state, c))
+            }),
     )
 }
 

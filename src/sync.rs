@@ -5,13 +5,15 @@
 use crate::account::{self, blocking};
 use crate::auth;
 use crate::data::Sent;
-use crate::model::{PendingOp, Profile, Task};
+use crate::model::{Group, Notice, NoticeKind, PendingOp, Profile, Task};
+use crate::overlay;
 use crate::state::{AppState, Auth, SyncStatus};
 use crate::supabase::{self, Error, Session};
 use chrono::{DateTime, Utc};
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use futures::{FutureExt, StreamExt};
 use gpui::{App, AsyncApp, Global};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -94,6 +96,8 @@ struct Job {
     /// The queue with a snapshot of each task to upload.
     ops: Vec<(PendingOp, Option<Task>)>,
     known_avatar: Option<String>,
+    /// Avatar URLs of the people already known, to download only new or changed pictures.
+    known_avatars: HashMap<Uuid, Option<String>>,
 }
 
 fn prepare(cx: &mut App) -> Option<Job> {
@@ -112,6 +116,7 @@ fn prepare(cx: &mut App) -> Option<Job> {
             session: session.clone(),
             ops: s.data.pending.iter().map(|op| (*op, snapshot(op))).collect(),
             known_avatar: s.data.account.as_ref().and_then(|a| a.avatar_url.clone()),
+            known_avatars: s.data.profiles.iter().map(|p| (p.id, p.avatar_url.clone())).collect(),
         }
     };
     state.update(cx, |s, cx| {
@@ -128,6 +133,8 @@ struct Outcome {
     profile: Option<Profile>,
     sent: Vec<Sent>,
     remote: Option<Vec<Task>>,
+    /// Groups and the people in them.
+    directory: Option<(Vec<Group>, Vec<Profile>)>,
     error: Option<Error>,
     /// The refresh token was rejected: the user has to sign in again.
     relogin: bool,
@@ -142,6 +149,7 @@ fn run(job: Job) -> Outcome {
         profile: None,
         sent: Vec::new(),
         remote: None,
+        directory: None,
         error: None,
         relogin: false,
     };
@@ -180,13 +188,29 @@ fn run(job: Job) -> Outcome {
     }
     match supabase::fetch_tasks(&session) {
         Ok(tasks) => out.remote = Some(tasks),
+        Err(e) => {
+            out.error = Some(e);
+            return out;
+        }
+    }
+    match supabase::fetch_groups(&session).and_then(|groups| Ok((groups, supabase::fetch_profiles(&session)?))) {
+        Ok((groups, profiles)) => {
+            for profile in &profiles {
+                let known = job.known_avatars.get(&profile.id);
+                if known != Some(&profile.avatar_url) || !account::avatar_path(profile.id).exists() {
+                    account::cache_avatar(profile);
+                }
+            }
+            out.directory = Some((groups, profiles));
+        }
         Err(e) => out.error = Some(e),
     }
     out
 }
 
 fn apply(out: Outcome, cx: &mut App) -> Turn {
-    AppState::global(cx).update(cx, |s, cx| {
+    let mut notices = Vec::new();
+    let turn = AppState::global(cx).update(cx, |s, cx| {
         match &mut s.auth {
             Auth::SignedIn(current) if current.user_id == out.user_id => {
                 if let Some(session) = out.session {
@@ -211,7 +235,19 @@ fn apply(out: Outcome, cx: &mut App) -> Turn {
             if let Some(profile) = out.profile {
                 d.account = Some(profile);
             }
-            d.merge_sync(&out.sent, out.remote, Utc::now());
+            if let Some((groups, profiles)) = out.directory {
+                d.groups = groups;
+                d.profiles = profiles;
+            }
+            for id in d.merge_sync(&out.sent, out.remote, Utc::now()) {
+                let Some(task) = d.task(id) else { continue };
+                let group = task.group_id.and_then(|g| d.group(g)).map_or("Grup", |g| g.name.as_str());
+                notices.push(Notice {
+                    priority: Some(task.priority),
+                    task_id: Some(id),
+                    ..Notice::new(NoticeKind::Shared, "Sana bir görev atandı", format!("{group} · {}", task.title), Utc::now())
+                });
+            }
         });
         let (status, turn) = match out.error {
             None => (SyncStatus::Idle, Turn::Done),
@@ -227,5 +263,9 @@ fn apply(out: Outcome, cx: &mut App) -> Turn {
         s.sync = status;
         cx.notify();
         turn
-    })
+    });
+    for notice in notices {
+        overlay::notify(cx, notice);
+    }
+    turn
 }

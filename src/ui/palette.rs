@@ -22,12 +22,13 @@ struct Command {
     page: Page,
 }
 
-const COMMANDS: [Command; 7] = [
+const COMMANDS: [Command; 8] = [
     Command { label: "Yeni Görev Oluştur", glyph: icons::ADD, page: Page::Form },
     Command { label: "Dashboard", glyph: icons::APPS, page: Page::Dashboard },
     Command { label: "Görevler", glyph: icons::LIST, page: Page::List },
     Command { label: "Kanban Panosu", glyph: icons::KANBAN, page: Page::Kanban },
     Command { label: "Takvim", glyph: icons::CALENDAR, page: Page::Calendar },
+    Command { label: "Gruplar", glyph: icons::USERS, page: Page::Groups },
     Command { label: "Bildirimler", glyph: icons::BELL, page: Page::Notifications },
     Command { label: "Ayarlar", glyph: icons::SETTINGS, page: Page::Settings },
 ];

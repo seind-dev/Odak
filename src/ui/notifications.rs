@@ -80,6 +80,7 @@ fn row(n: &Notice, state: &Entity<AppState>, now: DateTime<Utc>, c: &Colors) -> 
         NoticeKind::Reminder => icons::BELL,
         NoticeKind::Alert => icons::INFO,
         NoticeKind::Update => icons::REFRESH,
+        NoticeKind::Shared => icons::USERS,
     };
     let dot = n.priority.map(priority_color).unwrap_or(c.muted);
     let hover = c.hover;

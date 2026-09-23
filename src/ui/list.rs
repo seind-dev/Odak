@@ -6,8 +6,8 @@ use crate::theme::{self, Colors, priority_color, status_color};
 use crate::ui::text_input::{TextEvent, TextInput};
 use crate::ui::icons::{self, icon};
 use crate::ui::markdown;
-use crate::ui::widgets::{DraggedTask, chip, icon_chip, page_title, primary_button, segmented};
-use crate::views::{self, ListFilter};
+use crate::ui::widgets::{DraggedTask, chip, icon_chip, page_title, pill, primary_button, segmented, sharing_badges};
+use crate::views::{self, ListFilter, Scope};
 use chrono::{DateTime, Utc};
 use gpui::{
     AnyElement, App, Context, Entity, FontWeight, IntoElement, Render, SharedString, Subscription, Window, div,
@@ -50,6 +50,7 @@ impl ListPage {
         let subtasks_done = t.subtasks.iter().filter(|s| s.completed).count();
         let overdue = views::is_overdue(t, now);
         let summary = markdown::summary(&t.description);
+        let badges = sharing_badges(&state.read(cx).data, t, c);
 
         div()
             .id(id)
@@ -135,7 +136,8 @@ impl ListPage {
                             .when(!t.subtasks.is_empty(), |d| {
                                 d.child(icon_chip(icons::LIST, format!("{}/{}", subtasks_done, t.subtasks.len()), c.muted))
                             })
-                            .children(t.tags.iter().map(|tag| chip(format!("#{tag}"), c.muted))),
+                            .children(t.tags.iter().map(|tag| chip(format!("#{tag}"), c.muted)))
+                            .children(badges),
                     ),
             )
             .child(
@@ -211,6 +213,24 @@ impl Render for ListPage {
                 })
         });
 
+        let scopes: Vec<(Scope, String)> = if data.groups.is_empty() {
+            Vec::new()
+        } else {
+            [(Scope::All, "Tümü".to_string()), (Scope::Personal, "Kişisel".to_string())]
+                .into_iter()
+                .chain(data.groups.iter().map(|g| (Scope::Group(g.id), g.name.clone())))
+                .collect()
+        };
+        let scope_pills = scopes.into_iter().enumerate().map(|(ix, (scope, label))| {
+            let this = this.clone();
+            pill(("scope", ix), self.filter.scope == scope, &c).child(label).on_click(move |_, _, cx| {
+                this.update(cx, |this, cx| {
+                    this.filter.scope = scope;
+                    cx.notify();
+                })
+            })
+        });
+
         let body = if cards.is_empty() {
             div()
                 .flex_1()
@@ -260,6 +280,7 @@ impl Render for ListPage {
                     .child(segmented("priority-filter", &priority_options, self.filter.priority, &c, set_priority))
                     .children(tag_chips),
             )
+            .child(div().flex().flex_none().flex_wrap().gap_1p5().children(scope_pills))
             .child(body)
     }
 }

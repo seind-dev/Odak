@@ -368,3 +368,103 @@ fn old_data_files_load_without_sync_fields() {
     let json = serde_json::to_string(&bound()).unwrap();
     assert!(json.contains("\"lastAccount\"") && json.contains("\"remoteIds\""));
 }
+
+
+// ----- groups: drafts, assignment notices, reminders, signing out -----
+
+fn owned_by(d: &mut Data, title: &str, owner: u128, group: Option<u128>, assignee: Option<u128>) -> Uuid {
+    let id = d.add_task(draft(title), t0()).unwrap();
+    let t = d.tasks.iter_mut().find(|t| t.id == id).unwrap();
+    t.owner_id = Some(Uuid::from_u128(owner));
+    t.group_id = group.map(Uuid::from_u128);
+    t.assignee_id = assignee.map(Uuid::from_u128);
+    id
+}
+
+#[test]
+fn drafts_keep_group_and_drop_an_assignee_without_one() {
+    let mut d = Data::default();
+    let g = Uuid::from_u128(50);
+    let a = Uuid::from_u128(2);
+    let id = d.add_task(TaskDraft { group_id: Some(g), assignee_id: Some(a), ..draft("x") }, t0()).unwrap();
+    assert_eq!((d.task(id).unwrap().group_id, d.task(id).unwrap().assignee_id), (Some(g), Some(a)));
+    d.update_task(id, TaskDraft { group_id: None, assignee_id: Some(a), ..draft("x") }, t0()).unwrap();
+    assert_eq!((d.task(id).unwrap().group_id, d.task(id).unwrap().assignee_id), (None, None));
+}
+
+#[test]
+fn tasks_newly_assigned_by_others_are_reported_after_the_first_pull() {
+    let mut d = bound();
+    let theirs = owned_by(&mut d, "theirs", 2, Some(50), None);
+    let own = owned_by(&mut d, "own", 1, Some(50), None);
+    let already = owned_by(&mut d, "already", 2, Some(50), Some(1));
+    let assign = |t: &Task| Task { assignee_id: Some(Uuid::from_u128(1)), ..t.clone() };
+    let server: Vec<Task> = d.tasks.iter().map(assign).collect();
+
+    let mut first = d.clone();
+    assert!(first.merge_sync(&[], Some(server.clone()), t0()).is_empty(), "first pull: no flood of notices");
+
+    d.last_sync = Some(t0());
+    let assigned = d.merge_sync(&[], Some(server), t0());
+    assert_eq!(assigned, vec![theirs], "own tasks and old assignments are not news");
+    assert!(!assigned.contains(&own) && !assigned.contains(&already));
+}
+
+#[test]
+fn reminders_ring_only_for_the_owner_and_the_assignee() {
+    let mut d = bound();
+    let due = |d: &mut Data, id: Uuid| {
+        let t = d.tasks.iter_mut().find(|t| t.id == id).unwrap();
+        t.reminder = Some(Reminder { date_time: t0(), repeat: Repeat::Once, enabled: true, next_trigger: t0() });
+    };
+    let mine = owned_by(&mut d, "mine", 1, None, None);
+    let assigned = owned_by(&mut d, "assigned", 2, Some(50), Some(1));
+    let others = owned_by(&mut d, "others", 2, Some(50), Some(3));
+    for id in [mine, assigned, others] {
+        due(&mut d, id);
+    }
+    let fired: Vec<Uuid> = d.fire_due_reminders(t0()).iter().map(|t| t.id).collect();
+    assert_eq!(fired, vec![mine, assigned]);
+
+    let mut signed_out = Data::default();
+    let id = signed_out.add_task(draft("local"), t0()).unwrap();
+    due(&mut signed_out, id);
+    assert!(signed_out.has_due_reminders(t0()), "without an account every reminder rings");
+}
+
+#[test]
+fn signing_out_keeps_own_tasks_and_forgets_the_rest() {
+    let mut d = bound();
+    let mine = owned_by(&mut d, "mine", 1, Some(50), None);
+    let unsent = d.add_task(draft("unsent"), t0()).unwrap();
+    let theirs = owned_by(&mut d, "theirs", 2, Some(50), None);
+    d.remote_ids = vec![mine, theirs];
+    d.pending = vec![PendingOp::Upsert(theirs), PendingOp::Upsert(unsent)];
+    d.groups.push(Group { id: Uuid::from_u128(50), name: "Ekip".into(), owner_id: Uuid::from_u128(2), members: vec![] });
+    d.profiles.push(account(2));
+    d.forget_account();
+    assert!(d.task(mine).is_some() && d.task(unsent).is_some() && d.task(theirs).is_none());
+    assert_eq!(d.pending, vec![PendingOp::Upsert(unsent)]);
+    assert_eq!(d.remote_ids, vec![mine]);
+    assert!(d.groups.is_empty() && d.profiles.is_empty() && d.account.is_none());
+    assert_eq!(d.last_account, Some(Uuid::from_u128(1)), "same account can carry on later");
+}
+
+#[test]
+fn copying_to_another_account_leaves_other_peoples_tasks_behind() {
+    let mut d = bound();
+    owned_by(&mut d, "mine", 1, None, None);
+    owned_by(&mut d, "theirs", 2, Some(50), None);
+    d.account = Some(account(3));
+    d.adopt_local_tasks(true);
+    assert_eq!(titles(&d), "mine");
+}
+
+#[test]
+fn profile_lookup_includes_the_account() {
+    let mut d = bound();
+    d.profiles.push(account(2));
+    assert_eq!(d.profile(Uuid::from_u128(1)).unwrap().username, "u1");
+    assert_eq!(d.profile(Uuid::from_u128(2)).unwrap().username, "u2");
+    assert!(d.profile(Uuid::from_u128(3)).is_none());
+}

@@ -18,6 +18,7 @@ pub enum Page {
     Kanban,
     Calendar,
     Form,
+    Groups,
     Notifications,
     Settings,
 }

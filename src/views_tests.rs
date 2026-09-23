@@ -42,6 +42,7 @@ fn filter_by_priority_tag_and_query() {
         priority,
         tag: tag.map(str::to_string),
         query: query.into(),
+        ..Default::default()
     };
     assert_eq!(titles(filter_tasks(&tasks, &f(None, None, ""))), ["Rapor yaz", "Süt al", "Sunum"]);
     assert_eq!(titles(filter_tasks(&tasks, &f(Some(High), None, ""))), ["Rapor yaz", "Sunum"]);
@@ -144,4 +145,32 @@ fn search_tasks_matches_title_description_and_tags() {
     assert_eq!(titles(search_tasks(&tasks, "EV", 10)), ["Market"]);
     assert!(search_tasks(&tasks, "  ", 10).is_empty());
     assert_eq!(search_tasks(&tasks, "r", 1).len(), 1);
+}
+
+
+#[test]
+fn scope_filters_personal_and_group_tasks() {
+    let g = Uuid::from_u128(50);
+    let mut shared = task("shared", Priority::Low, Status::Pending, &[], None);
+    shared.group_id = Some(g);
+    let personal = task("personal", Priority::Low, Status::Pending, &[], None);
+    let tasks = vec![shared, personal];
+    let titles = |scope| {
+        filter_tasks(&tasks, &ListFilter { scope, ..Default::default() }).iter().map(|t| t.title.as_str()).collect::<Vec<_>>()
+    };
+    assert_eq!(titles(Scope::All), vec!["shared", "personal"]);
+    assert_eq!(titles(Scope::Personal), vec!["personal"]);
+    assert_eq!(titles(Scope::Group(g)), vec!["shared"]);
+}
+
+#[test]
+fn assigned_to_lists_open_tasks_of_that_user() {
+    let me = Uuid::from_u128(1);
+    let mut open = task("open", Priority::Low, Status::Pending, &[], None);
+    open.assignee_id = Some(me);
+    let mut done = task("done", Priority::Low, Status::Completed, &[], None);
+    done.assignee_id = Some(me);
+    let other = task("other", Priority::Low, Status::Pending, &[], None);
+    let tasks = vec![open, done, other];
+    assert_eq!(assigned_to(&tasks, me).iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), vec!["open"]);
 }

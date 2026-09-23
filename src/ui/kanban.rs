@@ -4,25 +4,27 @@ use crate::model::{Status, Task};
 use crate::state::AppState;
 use crate::theme::{Colors, priority_color, status_color};
 use crate::ui::icons;
-use crate::ui::widgets::{DraggedTask, chip, icon_chip, page_title};
+use crate::data::Data;
+use crate::ui::widgets::{DraggedTask, chip, icon_chip, page_title, sharing_badges};
 use crate::views;
 use chrono::Utc;
 use gpui::{App, Entity, FontWeight, Hsla, IntoElement, div, prelude::*, px};
 
 pub fn render(c: &Colors, cx: &App) -> impl IntoElement {
     let state = AppState::global(cx);
-    let tasks = &state.read(cx).data.tasks;
+    let data = &state.read(cx).data;
+    let tasks = &data.tasks;
     div().size_full().flex().flex_col().gap_4().p_6().child(page_title("Kanban", c)).child(
         div()
             .flex_1()
             .min_h_0()
             .flex()
             .gap_4()
-            .children(Status::ALL.map(|status| column(&state, status, views::with_status(tasks, status), c))),
+            .children(Status::ALL.map(|status| column(&state, data, status, views::with_status(tasks, status), c))),
     )
 }
 
-fn column(state: &Entity<AppState>, status: Status, tasks: Vec<&Task>, c: &Colors) -> impl IntoElement {
+fn column(state: &Entity<AppState>, data: &Data, status: Status, tasks: Vec<&Task>, c: &Colors) -> impl IntoElement {
     let accent = c.accent;
     let color = status_color(status);
     div()
@@ -65,11 +67,11 @@ fn column(state: &Entity<AppState>, status: Status, tasks: Vec<&Task>, c: &Color
                 .flex()
                 .flex_col()
                 .gap_2()
-                .children(tasks.into_iter().map(|t| card(state, t, c))),
+                .children(tasks.into_iter().map(|t| card(state, data, t, c))),
         )
 }
 
-fn card(state: &Entity<AppState>, t: &Task, c: &Colors) -> impl IntoElement {
+fn card(state: &Entity<AppState>, data: &Data, t: &Task, c: &Colors) -> impl IntoElement {
     let id = t.id;
     let hover_border = c.muted;
     div()
@@ -98,6 +100,8 @@ fn card(state: &Entity<AppState>, t: &Task, c: &Colors) -> impl IntoElement {
                 .flex_wrap()
                 .gap_1p5()
                 .child(chip(t.priority.label(), priority_color(t.priority)))
-                .when_some(t.due_date, |d, due| d.child(icon_chip(icons::CALENDAR, views::format_date(due), c.muted))),
+                .items_center()
+                .when_some(t.due_date, |d, due| d.child(icon_chip(icons::CALENDAR, views::format_date(due), c.muted)))
+                .children(sharing_badges(data, t, c)),
         )
 }
