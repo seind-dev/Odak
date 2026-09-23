@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Page {
     Dashboard,
     List,

@@ -8,6 +8,7 @@ use crate::supabase;
 use crate::sync;
 use crate::theme::{self, Colors};
 use crate::ui::icons::{self, icon};
+use crate::ui::motion;
 use crate::ui::widgets::{avatar, button, page_title, primary_button, segmented, sync_label, toggle};
 use chrono::Utc;
 use crate::updater;
@@ -128,7 +129,9 @@ fn account_section(cx: &App, c: &Colors) -> Div {
     let waiting = state.data.pending.len();
     section
         .child(body)
-        .when_some(state.auth_error.clone(), |d, error| d.child(div().text_sm().text_color(c.danger).child(error)))
+        .when_some(state.auth_error.clone(), |d, error| {
+            d.child(motion::appear(motion::key("auth-error", &error), div().text_sm().text_color(c.danger).child(error), 0., -4.))
+        })
         .when(signed_in && state.data.needs_account_choice(), |d| {
             d.child(notice(
                 format!(
@@ -156,7 +159,12 @@ fn account_section(cx: &App, c: &Colors) -> Div {
         })
         .when_some(sync_label(state, Utc::now()).filter(|_| signed_in), |d, (glyph, label)| {
             d.child(row(
-                div().flex().items_center().gap_2().child(icon(glyph).text_color(c.muted)).child(label),
+                motion::appear(
+                    motion::key("sync-label", &label),
+                    div().flex().items_center().gap_2().child(icon(glyph).text_color(c.muted)).child(label),
+                    0.,
+                    0.,
+                ),
                 "Görevler her değişiklikten sonra ve beş dakikada bir senkronize olur",
                 button("sync-now", "Şimdi senkronize et", c).on_click(|_, _, cx| sync::request(cx, sync::NOW)),
                 c,
@@ -164,9 +172,10 @@ fn account_section(cx: &App, c: &Colors) -> Div {
         })
 }
 
-/// A question inside a section, with its two answers.
-fn notice(message: String, yes: impl IntoElement, no: impl IntoElement, c: &Colors) -> Div {
-    div()
+/// A question inside a section, with its two answers; it drops in when it appears.
+fn notice(message: String, yes: impl IntoElement, no: impl IntoElement, c: &Colors) -> impl IntoElement {
+    let id = motion::key("notice", &message);
+    let question = div()
         .flex()
         .flex_col()
         .gap_3()
@@ -176,7 +185,8 @@ fn notice(message: String, yes: impl IntoElement, no: impl IntoElement, c: &Colo
         .border_color(c.border)
         .bg(c.bg)
         .child(div().text_sm().child(message))
-        .child(div().flex().gap_2().child(yes).child(no))
+        .child(div().flex().gap_2().child(yes).child(no));
+    motion::appear(id, question, 0., -4.)
 }
 
 fn profile_row(profile: &Profile, subtitle: String, control: impl IntoElement, c: &Colors) -> Div {

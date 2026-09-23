@@ -7,11 +7,12 @@ use crate::model::{Profile, Task};
 use crate::state::{AppState, Auth, SyncStatus};
 use crate::theme::Colors;
 use crate::ui::icons::{self, icon};
+use crate::ui::motion;
 use crate::views::{self, WEEKDAYS_TR};
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use gpui::{
-    AnyElement, App, Context, Div, ElementId, FontWeight, Hsla, IntoElement, Pixels, Render, SharedString, Stateful,
-    Window, div, img, prelude::*, px, white,
+    AnimationExt, AnyElement, App, Context, Div, ElementId, FontWeight, Hsla, IntoElement, Pixels, Render,
+    SharedString, Stateful, Window, div, img, prelude::*, px, white,
 };
 use std::rc::Rc;
 use uuid::Uuid;
@@ -32,6 +33,7 @@ pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, c: &Colo
         .text_color(c.text)
         .cursor_pointer()
         .hover(move |s| s.bg(hover))
+        .active(|s| s.opacity(0.8))
         .child(label.into())
 }
 
@@ -98,10 +100,25 @@ pub fn pill(id: impl Into<ElementId>, selected: bool, c: &Colors) -> Stateful<Di
         .border_1()
         .text_sm()
         .cursor_pointer()
-        .when(selected, |d| d.bg(c.accent).border_color(c.accent).text_color(white()))
+        .when(selected, |d| d.border_color(c.accent).text_color(c.accent))
         .when(!selected, |d| d.border_color(c.border).text_color(c.text))
         // Always attached (see `segmented`).
         .hover(move |s| if selected { s } else { s.bg(hover) })
+        .active(|s| s.opacity(0.8))
+        .child(tint("pill-tint", selected, Hsla::from(c.accent).opacity(0.16)))
+}
+
+/// Selection tint behind a control's content: fades in and out with its state. The control's
+/// later children are drawn over it.
+fn tint(id: &'static str, on: bool, color: Hsla) -> impl IntoElement {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .rounded_full()
+        .bg(color)
+        .with_spring(id, motion::spring(on, false), |d, phase| d.opacity(phase.0.clamp(0.0, 1.0)))
 }
 
 /// Cloud glyph and text for the sync state (sidebar and Settings); `None` without an account.
@@ -139,6 +156,7 @@ pub fn primary_button(id: impl Into<ElementId>, label: impl Into<SharedString>, 
         .text_color(white())
         .cursor_pointer()
         .hover(|s| s.opacity(0.9))
+        .active(|s| s.opacity(0.75))
         .child(label.into())
 }
 
@@ -160,6 +178,7 @@ pub fn icon_button(id: impl Into<ElementId>, glyph: &'static str, c: &Colors) ->
         .text_color(c.text)
         .cursor_pointer()
         .hover(move |s| s.bg(hover))
+        .active(|s| s.opacity(0.8))
         .child(icon(glyph))
 }
 
@@ -191,13 +210,15 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
                 .rounded_md()
                 .text_sm()
                 .cursor_pointer()
-                .when(active, |d| d.bg(accent).text_color(white()))
-                .when(!active, |d| d.text_color(muted))
                 // Always attached: GPUI only tracks hover while a hover style exists, so adding it
                 // only to inactive items leaves a stale highlight after the selection changes.
                 .hover(move |s| if active { s } else { s.bg(hover) })
                 .child(label)
                 .on_click(move |_, window, cx| on_select(value, window, cx))
+                .with_spring(motion::key("segment", (id, ix)), motion::spring(active, false), move |d, phase| {
+                    let p = phase.clamp(0.0..=1.0);
+                    d.bg(Hsla::from(accent).opacity(p.0)).text_color(p.interpolate(Hsla::from(muted), white()))
+                })
         }));
     // The wrapping row keeps the group at its natural width inside column layouts.
     div().flex().flex_none().child(group)
@@ -213,10 +234,16 @@ pub fn toggle(id: impl Into<ElementId>, on: bool, c: &Colors) -> Stateful<Div> {
         .p(px(2.))
         .rounded_full()
         .flex()
-        .when(on, |d| d.justify_end())
-        .bg(if on { c.accent } else { c.border })
+        .bg(c.border)
         .cursor_pointer()
-        .child(div().size(px(16.)).rounded_full().bg(white()))
+        .child(tint("track", on, c.accent.into()))
+        .child(
+            div()
+                .size(px(16.))
+                .rounded_full()
+                .bg(white())
+                .with_spring("knob", motion::spring(if on { px(16.) } else { px(0.) }, false), |d, x| d.relative().left(x)),
+        )
 }
 
 /// Square checkbox; chain `.on_click(...)`.
@@ -233,7 +260,17 @@ pub fn checkbox(id: impl Into<ElementId>, checked: bool, c: &Colors) -> Stateful
         .justify_center()
         .text_xs()
         .cursor_pointer()
-        .when(checked, |d| d.bg(c.accent).text_color(white()).child(icon(icons::CHECK)))
+        .child(
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(c.accent)
+                .text_color(white())
+                .child(icon(icons::CHECK))
+                .with_spring("check", motion::spring(checked, false), |d, phase| d.opacity(phase.0.clamp(0.0, 1.0))),
+        )
 }
 
 /// Small rounded label (priority, tag, status).

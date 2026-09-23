@@ -3,6 +3,7 @@
 use crate::state::AppState;
 use crate::theme::{self, priority_color};
 use crate::ui::icons;
+use crate::ui::motion;
 use crate::ui::widgets::{button, icon_button, month_grid, page_title};
 use crate::views::{self, add_months, first_of_month, month_title};
 use chrono::{Datelike, Local, NaiveDate};
@@ -16,6 +17,8 @@ const MAX_PER_DAY: usize = 3;
 pub struct CalendarPage {
     /// First day of the month shown.
     month: NaiveDate,
+    /// Where the next month grid slides in from: +1 later month, -1 earlier, 0 none.
+    direction: f32,
     _observe: Subscription,
 }
 
@@ -24,11 +27,17 @@ impl CalendarPage {
         let state = AppState::global(cx);
         CalendarPage {
             month: first_of_month(Local::now().date_naive()),
+            direction: 0.0,
             _observe: cx.observe(&state, |_, _, cx| cx.notify()),
         }
     }
 
     fn show_month(&mut self, month: NaiveDate, cx: &mut Context<Self>) {
+        self.direction = match month.cmp(&self.month) {
+            std::cmp::Ordering::Greater => 1.0,
+            std::cmp::Ordering::Less => -1.0,
+            std::cmp::Ordering::Equal => self.direction,
+        };
         self.month = month;
         cx.notify();
     }
@@ -106,6 +115,11 @@ impl Render for CalendarPage {
                         }))),
                 ),
             )
-            .child(div().id("calendar").flex_1().min_h_0().overflow_y_scroll().child(month_grid(self.month, &c, &cell)))
+            .child(div().id("calendar").flex_1().min_h_0().overflow_y_scroll().child(motion::appear(
+                motion::key("month", self.month),
+                month_grid(self.month, &c, &cell),
+                16.0 * self.direction,
+                0.,
+            )))
     }
 }

@@ -6,6 +6,7 @@ use crate::theme::{self, Colors, priority_color, status_color};
 use crate::ui::text_input::{TextEvent, TextInput};
 use crate::ui::icons::{self, icon};
 use crate::ui::markdown;
+use crate::ui::motion;
 use crate::ui::widgets::{DraggedTask, chip, icon_chip, page_title, pill, primary_button, segmented, sharing_badges};
 use crate::views::{self, ListFilter, Scope};
 use chrono::{DateTime, Utc};
@@ -52,7 +53,7 @@ impl ListPage {
         let summary = markdown::summary(&t.description);
         let badges = sharing_badges(&state.read(cx).data, t, c);
 
-        div()
+        let card = div()
             .id(id)
             .flex()
             .items_start()
@@ -93,8 +94,18 @@ impl ListPage {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .when(done, |d| d.bg(dot).text_color(white()).text_xs().child(icon(icons::CHECK)))
-                    .when(t.status == Status::InProgress, |d| d.child(div().size(px(8.)).rounded_full().bg(dot)))
+                    // The new state's mark fades in (keyed by status, so each change replays it).
+                    .when(done, |d| {
+                        d.child(motion::appear(
+                            motion::key("status", t.status),
+                            div().size_full().rounded_full().bg(dot).flex().items_center().justify_center().text_color(white()).text_xs().child(icon(icons::CHECK)),
+                            0.,
+                            0.,
+                        ))
+                    })
+                    .when(t.status == Status::InProgress, |d| {
+                        d.child(motion::appear(motion::key("status", t.status), div().size(px(8.)).rounded_full().bg(dot), 0., 0.))
+                    })
                     .on_click({
                         let state = state.clone();
                         move |_, _, cx| {
@@ -149,11 +160,14 @@ impl ListPage {
                     .rounded_md()
                     .text_xs()
                     .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .when(confirming, |d| d.bg(c.danger).text_color(white()).child(icon(icons::TRASH)).child("Emin misin?"))
-                    .when(!confirming, |d| d.text_color(c.muted).child(icon(icons::TRASH)))
+                    .when(confirming, |d| d.bg(c.danger).text_color(white()))
+                    .when(!confirming, |d| d.text_color(c.muted))
+                    .child(motion::appear(
+                        motion::key("delete", confirming),
+                        div().flex().items_center().gap_1().child(icon(icons::TRASH)).when(confirming, |d| d.child("Emin misin?")),
+                        0.,
+                        0.,
+                    ))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         if this.confirm_delete == Some(id) {
@@ -166,7 +180,8 @@ impl ListPage {
                         }
                         cx.notify();
                     })),
-            )
+            );
+        motion::enter_once("task", id, card)
     }
 }
 

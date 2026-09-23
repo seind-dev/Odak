@@ -8,6 +8,7 @@ use crate::supabase::{self, Error};
 use crate::sync;
 use crate::theme::{self, Colors};
 use crate::ui::icons::{self, icon};
+use crate::ui::motion;
 use crate::ui::text_input::{TextEvent, TextInput};
 use crate::ui::widgets::{button, chip, page_title, primary_button, user_avatar, user_name};
 use gpui::{App, Context, Entity, FontWeight, IntoElement, Render, Subscription, WeakEntity, Window, div, prelude::*, px, white};
@@ -210,7 +211,7 @@ impl GroupsPage {
                 let id = g.id;
                 let active = selected == Some(id);
                 let role = if Some(g.owner_id) == me { "Sahip" } else { "Üye" };
-                div()
+                let item = div()
                     .id(id)
                     .px_3()
                     .py_2()
@@ -236,11 +237,12 @@ impl GroupsPage {
                         this.confirm = None;
                         this.error = None;
                         cx.notify();
-                    }))
+                    }));
+                motion::enter_once("group", id, item)
             }))
     }
 
-    fn members(&self, g: &Group, me: Option<Uuid>, c: &Colors, cx: &Context<Self>) -> impl IntoElement {
+    fn members(&self, g: &Group, me: Option<Uuid>, c: &Colors, cx: &Context<Self>) -> gpui::Div {
         let data = &AppState::global(cx).read(cx).data;
         let owner = Some(g.owner_id) == me;
         let group = g.id;
@@ -251,7 +253,7 @@ impl GroupsPage {
         let rows = members.into_iter().map(|user| {
             let confirming = self.confirm == Some(Confirm::Remove(user));
             let profile = data.profile(user);
-            div()
+            let row = div()
                 .flex()
                 .items_center()
                 .gap_3()
@@ -279,7 +281,8 @@ impl GroupsPage {
                                 }
                             })),
                     )
-                })
+                });
+            motion::enter_once("member", (group, user), row)
         });
         let (end_label, end_confirm) = if owner {
             ("Grubu sil", Confirm::DeleteGroup(group))
@@ -386,8 +389,10 @@ impl Render for GroupsPage {
                 .flex()
                 .flex_col()
                 .gap_3()
-                .when_some(self.error.clone(), |d, e| d.child(div().text_sm().text_color(c.danger).child(e)))
-                .when(self.busy, |d| d.child(div().text_sm().text_color(c.muted).child("İşleniyor...")))
+                .when_some(self.error.clone(), |d, e| {
+                    d.child(motion::appear(motion::key("groups-error", &e), div().text_sm().text_color(c.danger).child(e), 0., -4.))
+                })
+                .when(self.busy, |d| d.child(motion::appear("busy", div().text_sm().text_color(c.muted).child("İşleniyor..."), 0., 0.)))
                 .child(
                     div()
                         .flex()
@@ -395,7 +400,8 @@ impl Render for GroupsPage {
                         .gap_4()
                         .child(self.group_list(&groups, selected, me, &c, cx))
                         .map(|d| match details {
-                            Some(g) => d.child(self.members(g, me, &c, cx)),
+                            // Switching groups cross-fades the member panel.
+                            Some(g) => d.child(motion::appear(motion::key("group-panel", g.id), self.members(g, me, &c, cx), 0., 4.)),
                             None => d.child(
                                 div().flex_1().p_4().text_sm().text_color(c.muted).child("Bir grup oluşturunca üyeleri burada görünür."),
                             ),

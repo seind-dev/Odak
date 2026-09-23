@@ -5,6 +5,7 @@ use crate::state::AppState;
 use crate::theme::{Colors, priority_color, status_color};
 use crate::fonts;
 use crate::ui::icons::{self, icon};
+use crate::ui::motion;
 use crate::ui::widgets::page_title;
 use crate::views;
 use chrono::Utc;
@@ -60,7 +61,7 @@ pub fn render(c: &Colors, cx: &App) -> impl IntoElement {
 }
 
 fn tile(glyph: &'static str, label: &'static str, value: usize, color: Rgba, c: &Colors) -> impl IntoElement {
-    div()
+    let tile = div()
         .flex_1()
         .p_4()
         .rounded_xl()
@@ -79,7 +80,8 @@ fn tile(glyph: &'static str, label: &'static str, value: usize, color: Rgba, c: 
                 .text_color(color)
                 .child(value.to_string()),
         )
-        .child(div().text_xs().text_color(c.muted).child(label))
+        .child(div().text_xs().text_color(c.muted).child(label));
+    motion::enter_once("tile", label, tile)
 }
 
 fn section(
@@ -107,7 +109,7 @@ fn section(
         .children(tasks.into_iter().map(|t| {
             let id = t.id;
             let state = state.clone();
-            div()
+            let row = div()
                 .id(id)
                 .px_2()
                 .py_1p5()
@@ -122,6 +124,7 @@ fn section(
                 .child(div().flex_1().min_w_0().text_sm().truncate().child(t.title.clone()))
                 .when_some(t.due_date, |d, due| {
                     d.child(div().flex_none().text_xs().text_color(c.muted).child(views::format_date(due)))
-                })
+                });
+            motion::enter_once("dashboard-row", (title, id), row)
         }))
 }

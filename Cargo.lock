@@ -5428,6 +5428,7 @@ dependencies = [
  "gpui-pre-platform",
  "log",
  "pulldown-cmark",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "sha2 0.10.9",

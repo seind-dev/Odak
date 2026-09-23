@@ -2,6 +2,7 @@
 
 use crate::theme::{self, Colors};
 use crate::ui::icons;
+use crate::ui::motion;
 use crate::ui::widgets::{button, icon_button, month_grid};
 use crate::views::{add_months, first_of_month, format_date, format_date_time, month_title};
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
@@ -56,7 +57,7 @@ impl DateTimePicker {
         cx.notify();
     }
 
-    fn popover(&self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
+    fn popover(&self, c: &Colors, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let today = Local::now().date_naive();
         let selected = self.value.map(|v| v.date_naive());
         let (accent, text, muted, hover): (Hsla, Hsla, Hsla, Hsla) =
@@ -175,7 +176,12 @@ impl Render for DateTimePicker {
             )
             .when(self.open, |d| {
                 d.child(
-                    deferred(anchored().anchor(Anchor::TopLeft).snap_to_window_with_margin(px(8.)).child(self.popover(&c, cx)))
+                    deferred(anchored().anchor(Anchor::TopLeft).snap_to_window_with_margin(px(8.)).child(motion::appear(
+                        "popover-in",
+                        self.popover(&c, cx),
+                        0.,
+                        -4.,
+                    )))
                         .priority(1),
                 )
             })

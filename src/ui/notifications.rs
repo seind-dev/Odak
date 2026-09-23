@@ -1,9 +1,10 @@
 //! Bildirimler: every pop-up shown so far (newest first), with read state.
 
-use crate::model::{Notice, NoticeKind};
+use crate::model::Notice;
 use crate::state::AppState;
 use crate::theme::{Colors, priority_color};
 use crate::ui::icons::{self, icon};
+use crate::ui::motion;
 use crate::ui::widgets::{button, page_title};
 use crate::views;
 use chrono::{DateTime, Utc};
@@ -76,15 +77,10 @@ pub fn render(c: &Colors, cx: &App) -> impl IntoElement {
 
 fn row(n: &Notice, state: &Entity<AppState>, now: DateTime<Utc>, c: &Colors) -> impl IntoElement {
     let (id, task_id) = (n.id, n.task_id);
-    let glyph = match n.kind {
-        NoticeKind::Reminder => icons::BELL,
-        NoticeKind::Alert => icons::INFO,
-        NoticeKind::Update => icons::REFRESH,
-        NoticeKind::Shared => icons::USERS,
-    };
+    let glyph = icons::for_notice(n.kind);
     let dot = n.priority.map(priority_color).unwrap_or(c.muted);
     let hover = c.hover;
-    div()
+    let row = div()
         .id(id)
         .flex()
         .items_start()
@@ -132,5 +128,6 @@ fn row(n: &Notice, state: &Entity<AppState>, now: DateTime<Utc>, c: &Colors) -> 
                 )
                 .when(!n.body.is_empty(), |d| d.child(div().text_xs().text_color(c.muted).truncate().child(n.body.clone()))),
         )
-        .child(div().flex_none().text_xs().text_color(c.muted).child(views::time_ago(n.at, now)))
+        .child(div().flex_none().text_xs().text_color(c.muted).child(views::time_ago(n.at, now)));
+    motion::enter_once("notice", id, row)
 }

@@ -2,6 +2,7 @@
 //! font. `tools/make_fonts.py` keeps exactly the code points listed here, so add new icons here
 //! first (names and code points come from the package's css/regular/rounded.css) and re-run it.
 
+use crate::model::NoticeKind;
 use gpui::{Div, div, prelude::*};
 
 pub const FONT: &str = "uicons-regular-rounded";
@@ -34,6 +35,16 @@ pub const TRASH: &str = "\u{fe17}"; // trash
 pub const USER: &str = "\u{fea0}"; // user
 pub const USER_ADD: &str = "\u{fe7a}"; // user-add
 pub const USERS: &str = "\u{fea6}"; // users
+
+/// The icon of a notification kind (pop-ups and the Bildirimler page).
+pub fn for_notice(kind: NoticeKind) -> &'static str {
+    match kind {
+        NoticeKind::Reminder => BELL,
+        NoticeKind::Alert => INFO,
+        NoticeKind::Update => REFRESH,
+        NoticeKind::Shared => USERS,
+    }
+}
 
 /// One icon glyph; size and color follow the surrounding text (chain `.text_*()` to change them).
 pub fn icon(glyph: &'static str) -> Div {

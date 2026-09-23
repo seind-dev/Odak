@@ -10,6 +10,7 @@ use crate::theme::{self, Colors};
 use crate::ui::datetime_picker::DateTimePicker;
 use crate::ui::icons;
 use crate::ui::markdown;
+use crate::ui::motion;
 use crate::ui::text_input::{TextEvent, TextInput};
 use crate::ui::widgets::{
     button, checkbox, chip, field, icon_chip, page_title, pill, primary_button, segmented, user_avatar, user_name,
@@ -216,7 +217,7 @@ impl FormPage {
         let comments = d.comments.iter().map(|comment| {
             let id = comment.id;
             let confirming = d.confirm_delete == Some(id);
-            div()
+            let row = div()
                 .flex()
                 .items_start()
                 .gap_2()
@@ -249,12 +250,13 @@ impl FormPage {
                             .child(if confirming { "Emin misin?" } else { "Sil" })
                             .on_click(cx.listener(move |this, _, _, cx| this.delete_comment(id, cx))),
                     )
-                })
+                });
+            motion::enter_once("comment", id, row)
         });
         let history = d.activity.iter().map(|entry| {
             let who = entry.user_id.map_or_else(|| "Biri".to_string(), |id| user_name(data, id));
             let what = views::activity_text(&entry.action, &entry.details, |id| user_name(data, id));
-            div()
+            let line = div()
                 .flex()
                 .items_start()
                 .gap_2()
@@ -266,7 +268,8 @@ impl FormPage {
                         .text_sm()
                         .child(format!("{who} {what}"))
                         .child(div().text_xs().text_color(c.muted).child(views::time_ago(entry.created_at, now))),
-                )
+                );
+            motion::enter_once("activity", entry.id, line)
         });
         div()
             .flex()
@@ -293,7 +296,9 @@ impl FormPage {
                     ),
                 c,
             ))
-            .when_some(d.error.clone(), |col, e| col.child(div().text_sm().text_color(c.danger).child(e)))
+            .when_some(d.error.clone(), |col, e| {
+                col.child(motion::appear(motion::key("discussion-error", &e), div().text_sm().text_color(c.danger).child(e), 0., -4.))
+            })
             .when(!d.activity.is_empty(), |col| col.child(field("Etkinlik", div().flex().flex_col().gap_2().children(history), c)))
     }
 
@@ -423,7 +428,7 @@ impl FormPage {
                 .flex_col()
                 .gap_5()
                 .child(field("Grup", group_picker, c))
-                .when_some(assignee_picker, |d, picker| d.child(field("Atanan", picker, c))),
+                .when_some(assignee_picker, |d, picker| d.child(motion::appear("assignee-in", field("Atanan", picker, c), 0., -4.))),
         )
     }
 
@@ -558,7 +563,12 @@ impl Render for FormPage {
                 .child(field("Son tarih", self.due.clone(), &c))
                 .child(field(
                     "Hatırlatıcı",
-                    div().flex().flex_col().gap_2().child(self.reminder.clone()).when(has_reminder, |d| d.child(repeat)),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(self.reminder.clone())
+                        .when(has_reminder, |d| d.child(motion::appear("repeat-in", repeat, 0., -4.))),
                     &c,
                 ))
                 .child(field(
@@ -576,7 +586,9 @@ impl Render for FormPage {
                     div().flex().flex_col().gap_2().children(subtask_rows).child(self.subtask_input.clone()),
                     &c,
                 ))
-                .when_some(self.error.clone(), |d, e| d.child(div().text_sm().text_color(c.danger).child(e)))
+                .when_some(self.error.clone(), |d, e| {
+                    d.child(motion::appear(motion::key("form-error", &e), div().text_sm().text_color(c.danger).child(e), 0., -4.))
+                })
                 .child(
                     div()
                         .flex()

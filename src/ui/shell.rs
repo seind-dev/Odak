@@ -6,6 +6,7 @@ use crate::state::{AppState, Page};
 use crate::sync;
 use crate::theme::{self, Colors};
 use crate::ui::icons::{self, icon};
+use crate::ui::motion;
 use crate::ui::palette::{PaletteEvent, SearchPalette};
 use crate::ui::widgets::sync_label;
 use crate::ui::{
@@ -20,6 +21,7 @@ use gpui::{
     WindowOptions, actions, div, prelude::*, px, rgb, size, white,
 };
 use std::time::Duration;
+use uuid::Uuid;
 
 actions!(seindtask, [NewTask, ShowDashboard, ShowKanban, ShowCalendar, ShowSettings, OpenSearch]);
 
@@ -66,6 +68,10 @@ pub struct Shell {
     form: Option<Entity<FormPage>>,
     palette: Option<Entity<SearchPalette>>,
     palette_subscription: Option<Subscription>,
+    /// The view last opened with a keyboard shortcut: shown without animation.
+    instant_view: Option<(Page, Option<Uuid>)>,
+    /// The palette was opened with Ctrl+K: shown without animation.
+    palette_instant: bool,
     _observe: Subscription,
 }
 
@@ -86,6 +92,8 @@ impl Shell {
             form: None,
             palette: None,
             palette_subscription: None,
+            instant_view: None,
+            palette_instant: false,
             state,
             focus,
             _observe: observe,
@@ -112,10 +120,11 @@ impl Shell {
         self.form = Some(cx.new(|cx| FormPage::new(editing, window, cx)));
     }
 
-    fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_palette(&mut self, from_keyboard: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.palette.is_some() {
             return;
         }
+        self.palette_instant = from_keyboard;
         let palette = cx.new(|cx| SearchPalette::new(window, cx));
         self.palette_subscription =
             Some(cx.subscribe_in(&palette, window, |this, _, _: &PaletteEvent, window, cx| this.close_palette(window, cx)));
@@ -135,6 +144,12 @@ impl Shell {
         cx.notify();
     }
 
+    /// Navigation from a keyboard shortcut: no animation.
+    fn go_by_key(&mut self, page: Page, cx: &mut Context<Self>) {
+        self.instant_view = Some((page, None));
+        self.go(page, cx);
+    }
+
     fn go(&mut self, page: Page, cx: &mut Context<Self>) {
         self.state.update(cx, |s, cx| s.navigate(page, cx));
     }
@@ -143,6 +158,7 @@ impl Shell {
         let state = self.state.read(cx);
         let stats = views::stats(&state.data.tasks, Utc::now());
         let (current, editing) = (state.page, state.editing);
+        let instant = self.instant_view == Some((current, editing));
         let unread = state.data.unread_notices();
         let sync_status = sync_label(state, Utc::now());
         let nav = [
@@ -192,7 +208,7 @@ impl Shell {
                         .child(icon(icons::SEARCH))
                         .child(div().flex_1().child("Ara…"))
                         .child(div().text_xs().child("Ctrl+K"))
-                        .on_click(cx.listener(|this, _, window, cx| this.open_palette(window, cx))),
+                        .on_click(cx.listener(|this, _, window, cx| this.open_palette(false, window, cx))),
                 ),
             )
             .child(div().flex_1().px_3().flex().flex_col().gap_0p5().children(nav.into_iter().map(
@@ -209,14 +225,15 @@ impl Shell {
                         .justify_between()
                         .text_sm()
                         .cursor_pointer()
-                        .when(active, |d| d.bg(hover).text_color(text).font_weight(FontWeight::MEDIUM))
+                        .when(active, |d| d.text_color(text).font_weight(FontWeight::MEDIUM))
                         .when(!active, |d| d.text_color(muted))
                         // Always attached so GPUI keeps tracking hover (see widgets::segmented).
                         .hover(move |s| s.bg(hover).text_color(text))
                         .child(div().flex().items_center().gap_3().child(icon(glyph)).child(label))
                         .map(|d| {
                             if page == Page::Notifications && unread > 0 {
-                                d.child(
+                                d.child(motion::appear(
+                                    motion::key("unread", unread),
                                     div()
                                         .px_1p5()
                                         .rounded_full()
@@ -225,12 +242,20 @@ impl Shell {
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(white())
                                         .child(if unread > 9 { "9+".to_string() } else { unread.to_string() }),
-                                )
+                                    0.,
+                                    3.,
+                                ))
                             } else {
                                 d.child(div().text_xs().text_color(muted).child(keys))
                             }
                         })
-                        .on_click(cx.listener(move |this, _, _, cx| this.go(page, cx)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.instant_view = None;
+                            this.go(page, cx)
+                        }))
+                        .with_spring(motion::key("nav", page), motion::spring(active, instant), move |d, phase| {
+                            d.bg(Hsla::from(hover).opacity(phase.0.clamp(0.0, 1.0)))
+                        })
                 },
             )))
             .child(
@@ -252,8 +277,12 @@ impl Shell {
                                 .gap_1p5()
                                 .cursor_pointer()
                                 .hover(move |s| s.text_color(text))
-                                .child(icon(glyph))
-                                .child(div().truncate().child(label))
+                                .child(motion::appear(
+                                    motion::key("sync-label", &label),
+                                    div().min_w_0().flex().items_center().gap_1p5().child(icon(glyph)).child(div().truncate().child(label)),
+                                    0.,
+                                    0.,
+                                ))
                                 .on_click(|_, _, cx| sync::request(cx, sync::NOW)),
                         )
                     })
@@ -336,9 +365,9 @@ fn titlebar(c: &Colors) -> impl IntoElement {
 impl Render for Shell {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = theme::current(cx);
-        let (page, banner) = {
+        let (page, editing, banner) = {
             let s = self.state.read(cx);
-            (s.page, s.banner.clone())
+            (s.page, s.editing, s.banner.clone())
         };
         let content: AnyElement = match page {
             Page::Dashboard => dashboard::render(&c, cx).into_any_element(),
@@ -354,7 +383,8 @@ impl Render for Shell {
             },
         };
         let banner = banner.map(|text| {
-            div()
+            let id = motion::key("banner", &text);
+            let banner = div()
                 .flex_none()
                 .mx_6()
                 .mt_4()
@@ -376,8 +406,16 @@ impl Render for Shell {
                         .cursor_pointer()
                         .child("Kapat")
                         .on_click(cx.listener(|this, _, _, cx| this.state.update(cx, |s, cx| s.dismiss_banner(cx)))),
-                )
+                );
+            motion::appear(id, banner, 0., -4.)
         });
+        // Views opened with a keyboard shortcut switch instantly.
+        let view = div().flex_1().min_h_0().child(content);
+        let view = if self.instant_view == Some((page, editing)) {
+            view.into_any_element()
+        } else {
+            motion::appear_for(motion::key("page", (page, editing)), view, 0., 4., Duration::from_millis(160)).into_any_element()
+        };
 
         div()
             .relative()
@@ -388,41 +426,42 @@ impl Render for Shell {
             .bg(c.bg)
             .text_color(c.text)
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &NewTask, _, cx| this.go(Page::Form, cx)))
-            .on_action(cx.listener(|this, _: &ShowDashboard, _, cx| this.go(Page::Dashboard, cx)))
-            .on_action(cx.listener(|this, _: &ShowKanban, _, cx| this.go(Page::Kanban, cx)))
-            .on_action(cx.listener(|this, _: &ShowCalendar, _, cx| this.go(Page::Calendar, cx)))
-            .on_action(cx.listener(|this, _: &ShowSettings, _, cx| this.go(Page::Settings, cx)))
-            .on_action(cx.listener(|this, _: &OpenSearch, window, cx| this.open_palette(window, cx)))
+            .on_action(cx.listener(|this, _: &NewTask, _, cx| this.go_by_key(Page::Form, cx)))
+            .on_action(cx.listener(|this, _: &ShowDashboard, _, cx| this.go_by_key(Page::Dashboard, cx)))
+            .on_action(cx.listener(|this, _: &ShowKanban, _, cx| this.go_by_key(Page::Kanban, cx)))
+            .on_action(cx.listener(|this, _: &ShowCalendar, _, cx| this.go_by_key(Page::Calendar, cx)))
+            .on_action(cx.listener(|this, _: &ShowSettings, _, cx| this.go_by_key(Page::Settings, cx)))
+            .on_action(cx.listener(|this, _: &OpenSearch, window, cx| this.open_palette(true, window, cx)))
             .child(titlebar(&c))
             .child(
                 div().flex_1().min_h_0().flex().child(self.sidebar(&c, cx)).child(
-                    div().flex_1().min_w_0().flex().flex_col().children(banner).child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .child(content)
-                            .with_animation(("page", page as usize), Animation::new(Duration::from_millis(150)), |el, t| {
-                                el.opacity(t)
-                            }),
-                    ),
+                    div().flex_1().min_w_0().flex().flex_col().children(banner).child(view),
                 ),
             )
             .when_some(self.palette.clone(), |d, palette| {
-                d.child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full()
-                        .flex()
-                        .justify_center()
-                        .items_start()
-                        .pt(px(110.))
-                        .bg(gpui::black().opacity(0.5))
-                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_palette(window, cx)))
-                        .child(palette),
-                )
+                let instant = self.palette_instant;
+                let panel = div().child(palette);
+                let backdrop = div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .flex()
+                    .justify_center()
+                    .items_start()
+                    .pt(px(110.))
+                    .bg(gpui::black().opacity(0.5))
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close_palette(window, cx)));
+                // Opened with Ctrl+K: instant. Opened with the mouse: the backdrop fades and the panel drops in.
+                if instant {
+                    d.child(backdrop.child(panel))
+                } else {
+                    d.child(
+                        backdrop
+                            .child(motion::appear_for("palette-panel", panel, 0., -8., Duration::from_millis(160)))
+                            .with_animation("palette-backdrop", Animation::new(Duration::from_millis(140)), |el, t| el.opacity(t)),
+                    )
+                }
             })
     }
 }

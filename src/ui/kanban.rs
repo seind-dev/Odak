@@ -4,6 +4,7 @@ use crate::model::{Status, Task};
 use crate::state::AppState;
 use crate::theme::{Colors, priority_color, status_color};
 use crate::ui::icons;
+use crate::ui::motion;
 use crate::data::Data;
 use crate::ui::widgets::{DraggedTask, chip, icon_chip, page_title, sharing_badges};
 use crate::views;
@@ -74,7 +75,8 @@ fn column(state: &Entity<AppState>, data: &Data, status: Status, tasks: Vec<&Tas
 fn card(state: &Entity<AppState>, data: &Data, t: &Task, c: &Colors) -> impl IntoElement {
     let id = t.id;
     let hover_border = c.muted;
-    div()
+    // Keyed by column too, so a card dropped on another column fades in there.
+    let card = div()
         .id(id)
         .p_3()
         .rounded_lg()
@@ -103,5 +105,6 @@ fn card(state: &Entity<AppState>, data: &Data, t: &Task, c: &Colors) -> impl Int
                 .items_center()
                 .when_some(t.due_date, |d, due| d.child(icon_chip(icons::CALENDAR, views::format_date(due), c.muted)))
                 .children(sharing_badges(data, t, c)),
-        )
+        );
+    motion::enter_once("kanban", (id, t.status), card)
 }

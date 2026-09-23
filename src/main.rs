@@ -52,6 +52,7 @@ fn main() {
     // Explicit: closing the window keeps the app (tray, reminders) running; only "Çıkış" quits.
     gpui_platform::application().with_quit_mode(QuitMode::Explicit).run(move |cx: &mut App| {
         fonts::load(cx);
+        ui::motion::follow_system_setting(cx);
         ui::text_input::bind_keys(cx);
         ui::shell::bind_keys(cx);
         let state = AppState::init(dir.join("data.json"), cx);
@@ -74,7 +75,10 @@ fn main() {
 fn start_reminder_loop(cx: &mut App) {
     cx.spawn(async move |cx| {
         loop {
-            cx.update(fire_due_reminders);
+            cx.update(|cx| {
+                ui::motion::follow_system_setting(cx);
+                fire_due_reminders(cx);
+            });
             cx.background_executor().timer(REMINDER_POLL).await;
         }
     })
