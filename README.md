@@ -14,7 +14,8 @@ Windows için hızlı bir görev yöneticisi. Rust ve Zed'in arayüz çatısı [
 - **Hesap ve senkron (isteğe bağlı):** Discord ile giriş yapınca görevlerin hesabına kaydedilir ve giriş yaptığın her bilgisayarda aynı olur. İnternet yokken de çalışır; değişiklikler bağlantı gelince gönderilir.
 - **Gruplar:** arkadaşlarını Discord kullanıcı adıyla gruba ekle; grup görevlerini herkes görür ve düzenler. Görevi bir üyeye atayabilir, yorum yazabilir ve görevin geçmişini görebilirsin. Değişiklikler ve yorumlar anında gelir; sana görev atandığında ya da görevine yorum yazıldığında bildirim alırsın.
 - **Bildirim geçmişi**, koyu ve açık tema.
-- **Sistem tepsisi:** pencereyi kapatınca tepside çalışmaya devam eder, istersen Windows ile birlikte açılır ve kendini otomatik günceller.
+- **Sistem tepsisi:** pencereyi kapatınca tepside çalışmaya devam eder, istersen Windows ile birlikte açılır.
+- **Otomatik güncelleme:** açılışta ve iki saatte bir yeni sürümü denetler, arka planda indirip kurar. Pencere açıkken kurulum için yeniden başlatmayı sana bırakır (kenar çubuğundaki "Güncelle" ya da Ayarlar).
 
 ## İndir
 

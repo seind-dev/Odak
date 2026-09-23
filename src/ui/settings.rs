@@ -11,40 +11,64 @@ use crate::ui::icons::{self, icon};
 use crate::ui::motion;
 use crate::ui::widgets::{avatar, button, page_title, primary_button, segmented, sync_label, toggle};
 use chrono::Utc;
-use crate::updater;
-use gpui::{App, Context, Div, FontWeight, IntoElement, Render, SharedString, Subscription, Window, div, prelude::*, px};
+use crate::updater::{self, Phase, Trigger};
+use crate::views;
+use gpui::{
+    AnyElement, App, Context, Div, FontWeight, IntoElement, Render, SharedString, Subscription, Window, div, prelude::*,
+    px, relative,
+};
 
 pub struct SettingsPage {
-    update_status: Option<String>,
-    checking: bool,
-    _observe: Subscription,
+    _observe: [Subscription; 2],
 }
 
 impl SettingsPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let state = AppState::global(cx);
-        let observe = cx.observe(&state, |_, _, cx| cx.notify());
-        SettingsPage { update_status: None, checking: false, _observe: observe }
+        let updater = updater::entity(cx);
+        SettingsPage { _observe: [cx.observe(&state, |_, _, cx| cx.notify()), cx.observe(&updater, |_, _, cx| cx.notify())] }
     }
+}
 
-    fn check_updates(&mut self, cx: &mut Context<Self>) {
-        if self.checking {
-            return;
-        }
-        self.checking = true;
-        self.update_status = Some("Denetleniyor...".into());
-        cx.notify();
-        let check = cx.background_executor().spawn(async { updater::check_and_download() });
-        cx.spawn(async move |this, cx| {
-            let message = check.await.message();
-            let _ = this.update(cx, |this, cx| {
-                this.checking = false;
-                this.update_status = Some(message);
-                cx.notify();
-            });
+/// The version row: what the updater is doing and the one action that makes sense now.
+fn update_row(phase: &Phase, c: &Colors) -> Div {
+    let check = || button("check-updates", "Güncellemeleri denetle", c).on_click(|_, _, cx| updater::check(Trigger::Manual, cx));
+    let busy = |label: &'static str| button("check-updates", label, c).opacity(0.6);
+    let (description, control): (String, AnyElement) = match phase {
+        Phase::Idle => ("Güncellemeler GitHub üzerinden kendiliğinden gelir".into(), check().into_any_element()),
+        Phase::NotInstalled => ("Güncelleme yalnızca kurulu sürümde çalışır".into(), check().into_any_element()),
+        Phase::Checking => ("Yeni sürüm aranıyor...".into(), busy("Denetleniyor...").into_any_element()),
+        Phase::UpToDate(at) => (
+            format!("Güncel · son denetim {}", views::time_ago(*at, chrono::Utc::now()).to_lowercase()),
+            check().into_any_element(),
+        ),
+        Phase::Downloading { version, percent } => (format!("v{version} indiriliyor · %{percent}"), busy("İndiriliyor...").into_any_element()),
+        Phase::Ready(version) => (
+            format!("v{version} indirildi; yeniden başlatınca kurulur"),
+            primary_button("install-update", "Yeniden başlat ve güncelle", c).on_click(|_, _, cx| updater::install(cx)).into_any_element(),
+        ),
+        Phase::Installing(version) => (format!("v{version} kuruluyor..."), busy("Kuruluyor...").into_any_element()),
+        Phase::Failed(e) => (e.clone(), check().into_any_element()),
+    };
+    let percent = match phase {
+        Phase::Downloading { percent, .. } => Some(*percent),
+        _ => None,
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(row(format!("Sürüm {}", env!("CARGO_PKG_VERSION")), description, control, c))
+        .when_some(percent, |d, percent| {
+            d.child(
+                div()
+                    .h(px(3.))
+                    .w_full()
+                    .rounded_full()
+                    .bg(c.border)
+                    .child(div().h_full().rounded_full().bg(c.accent).w(relative(f32::from(percent) / 100.))),
+            )
         })
-        .detach();
-    }
 }
 
 fn section(glyph: &'static str, title: &'static str, c: &Colors) -> Div {
@@ -237,8 +261,7 @@ impl Render for SettingsPage {
             let enable = !settings.start_minimized;
             move |_, _, cx| state.update(cx, |s, cx| s.mutate(cx, |d| d.settings.start_minimized = enable))
         });
-        let check = button("check-updates", if self.checking { "Denetleniyor..." } else { "Güncellemeleri denetle" }, &c)
-            .on_click(cx.listener(|this, _, _, cx| this.check_updates(cx)));
+        let update_phase = updater::entity(cx).read(cx).phase.clone();
 
         div().id("settings").size_full().overflow_y_scroll().child(
             div()
@@ -267,15 +290,7 @@ impl Render for SettingsPage {
                 )
                 .child(
                     section(icons::INFO, "Hakkında", &c)
-                        .child(row(
-                            format!("Sürüm {}", env!("CARGO_PKG_VERSION")),
-                            "Güncellemeler GitHub üzerinden gelir",
-                            check,
-                            &c,
-                        ))
-                        .when_some(self.update_status.clone(), |d, status| {
-                            d.child(div().text_sm().text_color(c.muted).child(status))
-                        })
+                        .child(update_row(&update_phase, &c))
                         .child(
                             div()
                                 .text_xs()

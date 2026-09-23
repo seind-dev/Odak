@@ -32,7 +32,7 @@ pub fn install(cx: &mut App) -> UnboundedSender<Command> {
             cx.update(|cx| match command {
                 Command::Show => open_main_window(cx),
                 Command::Quit => {
-                    updater::apply_pending_on_exit();
+                    updater::install_on_quit(cx);
                     cx.quit();
                 }
             });

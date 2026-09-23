@@ -4,6 +4,7 @@ use crate::APP_NAME;
 use crate::fonts;
 use crate::state::{AppState, Page};
 use crate::sync;
+use crate::updater::{self, Phase};
 use crate::theme::{self, Colors};
 use crate::ui::icons::{self, icon};
 use crate::ui::motion;
@@ -73,6 +74,7 @@ pub struct Shell {
     /// The palette was opened with Ctrl+K: shown without animation.
     palette_instant: bool,
     _observe: Subscription,
+    _observe_updates: Subscription,
 }
 
 impl Shell {
@@ -97,6 +99,7 @@ impl Shell {
             state,
             focus,
             _observe: observe,
+            _observe_updates: cx.observe(&updater::entity(cx), |_, _, cx| cx.notify()),
         };
         shell.sync_form(window, cx);
         shell
@@ -161,6 +164,7 @@ impl Shell {
         let instant = self.instant_view == Some((current, editing));
         let unread = state.data.unread_notices();
         let sync_status = sync_label(state, Utc::now());
+        let update_phase = updater::entity(cx).read(cx).phase.clone();
         let nav = [
             (Page::Dashboard, icons::APPS, "Dashboard", "Ctrl+D"),
             (Page::List, icons::LIST, "Görevler", ""),
@@ -286,9 +290,36 @@ impl Shell {
                                 .on_click(|_, _, cx| sync::request(cx, sync::NOW)),
                         )
                     })
-                    .child(div().flex_none().child(concat!("v", env!("CARGO_PKG_VERSION")))),
+                    .child(update_badge(&update_phase, c)),
             )
     }
+}
+
+/// The app version in the sidebar footer, or what the updater is doing (a ready update is one
+/// click away from installing).
+fn update_badge(phase: &Phase, c: &Colors) -> AnyElement {
+    let label = match phase {
+        Phase::Downloading { percent, .. } => format!("Güncelleme %{percent}"),
+        Phase::Ready(_) => "Güncelle".to_string(),
+        Phase::Installing(_) => "Güncelleniyor...".to_string(),
+        _ => return div().flex_none().child(concat!("v", env!("CARGO_PKG_VERSION"))).into_any_element(),
+    };
+    let ready = matches!(phase, Phase::Ready(_));
+    let badge = div()
+        .id("update-badge")
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .py_0p5()
+        .rounded_full()
+        .when(ready, |d| d.bg(c.accent).text_color(white()).cursor_pointer().hover(|s| s.opacity(0.9)))
+        .when(!ready, |d| d.text_color(c.muted))
+        .child(icon(icons::REFRESH))
+        .child(label)
+        .when(ready, |d| d.on_click(|_, _, cx| updater::install(cx)));
+    motion::appear(motion::key("update-badge", ready), badge, 0., 3.).into_any_element()
 }
 
 fn stat_box(count: usize, label: &'static str, color: Rgba, c: &Colors) -> impl IntoElement {

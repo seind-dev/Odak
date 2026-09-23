@@ -23,7 +23,6 @@ mod views;
 
 use chrono::Utc;
 use gpui::{App, QuitMode};
-use model::{Notice, NoticeKind};
 use state::AppState;
 use std::time::Duration;
 
@@ -62,12 +61,13 @@ fn main() {
         sync::start(cx);
         realtime::start(cx);
         instance.listen(tray::install(cx));
+        updater::start(cx);
         if !(minimized || settings.start_minimized) {
             ui::shell::open_main_window(cx);
         }
+        updater::announce_new_version(cx);
         overlay::startup_alert(cx);
         start_reminder_loop(cx);
-        start_update_check(cx);
     });
 }
 
@@ -97,15 +97,3 @@ fn fire_due_reminders(cx: &mut App) {
     }
 }
 
-/// About 3 s after startup: check GitHub Releases and, if a newer version was downloaded, say so.
-fn start_update_check(cx: &mut App) {
-    cx.spawn(async move |cx| {
-        cx.background_executor().timer(Duration::from_secs(3)).await;
-        let outcome = cx.background_executor().spawn(async { updater::check_and_download() }).await;
-        if let updater::Outcome::Ready(version) = outcome {
-            let body = format!("v{version} çıkışta veya sonraki açılışta kurulacak");
-            cx.update(|cx| overlay::notify(cx, Notice::new(NoticeKind::Update, "Güncelleme hazır", body, Utc::now())));
-        }
-    })
-    .detach();
-}

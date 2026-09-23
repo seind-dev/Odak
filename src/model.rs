@@ -227,6 +227,8 @@ pub struct Settings {
     pub auto_launch: bool,
     pub theme: Theme,
     pub start_minimized: bool,
+    /// The version that ran last, to say "Odak güncellendi" once after an update.
+    pub last_version: String,
 }
 
 #[cfg(test)]
