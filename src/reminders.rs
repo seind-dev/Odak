@@ -4,13 +4,13 @@ use crate::model::{Reminder, Repeat, Task};
 use chrono::{DateTime, Duration, Utc};
 use uuid::Uuid;
 
-/// Ids of tasks whose enabled reminder is due at `now`.
+/// Ids of tasks whose enabled reminder, or snoozed reminder, is due at `now`.
 pub fn due_now(tasks: &[Task], now: DateTime<Utc>) -> Vec<Uuid> {
-    tasks
-        .iter()
-        .filter(|t| t.reminder.as_ref().is_some_and(|r| r.enabled && r.next_trigger <= now))
-        .map(|t| t.id)
-        .collect()
+    tasks.iter().filter(|t| t.reminder.as_ref().is_some_and(|r| is_due(r, now))).map(|t| t.id).collect()
+}
+
+pub fn is_due(reminder: &Reminder, now: DateTime<Utc>) -> bool {
+    (reminder.enabled && reminder.next_trigger <= now) || reminder.snoozed_until.is_some_and(|at| at <= now)
 }
 
 /// Call after a reminder fired. One-time reminders are disabled; repeating ones move to their

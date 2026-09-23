@@ -7,7 +7,7 @@ fn at(h: u32, m: u32) -> DateTime<Utc> {
 }
 
 fn reminder(next: DateTime<Utc>, repeat: Repeat, enabled: bool) -> Reminder {
-    Reminder { date_time: next, repeat, enabled, next_trigger: next }
+    Reminder { date_time: next, repeat, enabled, next_trigger: next, snoozed_until: None }
 }
 
 fn task_with(reminder: Option<Reminder>) -> Task {
@@ -27,6 +27,7 @@ fn task_with(reminder: Option<Reminder>) -> Task {
         owner_id: None,
         group_id: None,
         assignee_id: None,
+        recurrence: None,
     }
 }
 

@@ -24,7 +24,7 @@ use gpui::{
 use std::time::Duration;
 use uuid::Uuid;
 
-actions!(seindtask, [NewTask, ShowDashboard, ShowKanban, ShowCalendar, ShowSettings, OpenSearch]);
+actions!(seindtask, [NewTask, ShowDashboard, ShowKanban, ShowCalendar, ShowSettings, OpenSearch, Undo]);
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
@@ -34,6 +34,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-l", ShowCalendar, None),
         KeyBinding::new("ctrl-,", ShowSettings, None),
         KeyBinding::new("ctrl-k", OpenSearch, None),
+        KeyBinding::new("ctrl-z", Undo, None),
     ]);
 }
 
@@ -73,6 +74,8 @@ pub struct Shell {
     instant_view: Option<(Page, Option<Uuid>)>,
     /// The palette was opened with Ctrl+K: shown without animation.
     palette_instant: bool,
+    /// The page shown last, to hand the keyboard to the task list when it opens.
+    last_page: Option<Page>,
     _observe: Subscription,
     _observe_updates: Subscription,
 }
@@ -96,6 +99,7 @@ impl Shell {
             palette_subscription: None,
             instant_view: None,
             palette_instant: false,
+            last_page: None,
             state,
             focus,
             _observe: observe,
@@ -111,6 +115,12 @@ impl Shell {
             let s = self.state.read(cx);
             (s.page, s.editing)
         };
+        let entered_list = page == Page::List && self.last_page != Some(Page::List);
+        self.last_page = Some(page);
+        if entered_list {
+            let list = gpui::Focusable::focus_handle(self.list.read(cx), cx);
+            window.focus(&list, cx);
+        }
         if page != Page::Form {
             if self.form.take().is_some() {
                 window.focus(&self.focus, cx);
@@ -295,6 +305,62 @@ impl Shell {
     }
 }
 
+/// "Geri al" at the bottom of the window after a deletion or a repeating task's completion.
+fn undo_toast(label: String, generation: u64, c: &Colors) -> impl IntoElement {
+    let (accent, hover, muted) = (c.accent, c.hover, c.muted);
+    let toast = div()
+        .flex()
+        .items_center()
+        .gap_3()
+        .pl_4()
+        .pr_1p5()
+        .py_1p5()
+        .rounded_lg()
+        .bg(c.surface)
+        .border_1()
+        .border_color(c.border)
+        .shadow_lg()
+        .text_sm()
+        .child(div().max_w(px(420.)).truncate().child(label))
+        .child(
+            div()
+                .id("undo")
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .text_color(accent)
+                .font_weight(FontWeight::MEDIUM)
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .child(icon(icons::UNDO))
+                .child("Geri al")
+                .on_click(|_, _, cx| AppState::global(cx).update(cx, |s, cx| s.undo(cx))),
+        )
+        .child(
+            div()
+                .id("undo-close")
+                .px_1p5()
+                .py_1()
+                .rounded_md()
+                .text_color(muted)
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .child(icon(icons::CLOSE))
+                .on_click(|_, _, cx| AppState::global(cx).update(cx, |s, cx| s.dismiss_undo(cx))),
+        );
+    div()
+        .absolute()
+        .bottom(px(20.))
+        .left_0()
+        .right_0()
+        .flex()
+        .justify_center()
+        .child(motion::appear(motion::key("undo-toast", generation), toast, 0., 8.))
+}
+
 /// The app version in the sidebar footer, or what the updater is doing (a ready update is one
 /// click away from installing).
 fn update_badge(phase: &Phase, c: &Colors) -> AnyElement {
@@ -396,9 +462,9 @@ fn titlebar(c: &Colors) -> impl IntoElement {
 impl Render for Shell {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = theme::current(cx);
-        let (page, editing, banner) = {
+        let (page, editing, banner, undo) = {
             let s = self.state.read(cx);
-            (s.page, s.editing, s.banner.clone())
+            (s.page, s.editing, s.banner.clone(), s.undo.as_ref().map(|u| (u.label.clone(), u.generation)))
         };
         let content: AnyElement = match page {
             Page::Dashboard => dashboard::render(&c, cx).into_any_element(),
@@ -463,12 +529,14 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &ShowCalendar, _, cx| this.go_by_key(Page::Calendar, cx)))
             .on_action(cx.listener(|this, _: &ShowSettings, _, cx| this.go_by_key(Page::Settings, cx)))
             .on_action(cx.listener(|this, _: &OpenSearch, window, cx| this.open_palette(true, window, cx)))
+            .on_action(cx.listener(|this, _: &Undo, _, cx| this.state.update(cx, |s, cx| s.undo(cx))))
             .child(titlebar(&c))
             .child(
                 div().flex_1().min_h_0().flex().child(self.sidebar(&c, cx)).child(
                     div().flex_1().min_w_0().flex().flex_col().children(banner).child(view),
                 ),
             )
+            .when_some(undo, |d, (label, generation)| d.child(undo_toast(label, generation, &c)))
             .when_some(self.palette.clone(), |d, palette| {
                 let instant = self.palette_instant;
                 let panel = div().child(palette);

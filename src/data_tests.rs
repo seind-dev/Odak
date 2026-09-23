@@ -415,7 +415,7 @@ fn reminders_ring_only_for_the_owner_and_the_assignee() {
     let mut d = bound();
     let due = |d: &mut Data, id: Uuid| {
         let t = d.tasks.iter_mut().find(|t| t.id == id).unwrap();
-        t.reminder = Some(Reminder { date_time: t0(), repeat: Repeat::Once, enabled: true, next_trigger: t0() });
+        t.reminder = Some(Reminder { date_time: t0(), repeat: Repeat::Once, enabled: true, next_trigger: t0(), snoozed_until: None });
     };
     let mine = owned_by(&mut d, "mine", 1, None, None);
     let assigned = owned_by(&mut d, "assigned", 2, Some(50), Some(1));
@@ -467,4 +467,80 @@ fn profile_lookup_includes_the_account() {
     assert_eq!(d.profile(Uuid::from_u128(1)).unwrap().username, "u1");
     assert_eq!(d.profile(Uuid::from_u128(2)).unwrap().username, "u2");
     assert!(d.profile(Uuid::from_u128(3)).is_none());
+}
+
+// ----- repeating tasks, snooze, undo, reschedule -----
+
+#[test]
+fn completing_a_repeating_task_moves_it_to_its_next_date() {
+    let mut d = Data::default();
+    let id = d.add_task(TaskDraft { recurrence: Some(Recurrence::Day), due_date: Some(t0()), ..draft("Spor") }, t0()).unwrap();
+    {
+        let t = d.tasks.iter_mut().find(|t| t.id == id).unwrap();
+        t.subtasks.push(SubTask { id: Uuid::from_u128(1), title: "ısın".into(), completed: true });
+        t.reminder = Some(Reminder { date_time: t0(), repeat: Repeat::Once, enabled: false, next_trigger: t0(), snoozed_until: None });
+    }
+    d.set_status(id, Status::Completed, t0()).unwrap();
+    let t = d.task(id).unwrap();
+    assert_eq!(t.status, Status::Pending);
+    assert_eq!(t.due_date, Some(t0() + Duration::days(1)));
+    assert!(!t.subtasks[0].completed);
+    let r = t.reminder.as_ref().unwrap();
+    assert!(r.enabled && r.next_trigger == t0() + Duration::days(1), "one-time reminder moves with the date");
+}
+
+#[test]
+fn saving_a_repeating_task_as_completed_also_moves_it() {
+    let mut d = Data::default();
+    let id = d.add_task(TaskDraft { recurrence: Some(Recurrence::Day), due_date: Some(t0()), ..draft("Spor") }, t0()).unwrap();
+    let edit = TaskDraft { status: Status::Completed, ..TaskDraft::from_task(d.task(id).unwrap()) };
+    d.update_task(id, edit, t0()).unwrap();
+    assert_eq!(d.task(id).unwrap().status, Status::Pending);
+    assert_eq!(d.task(id).unwrap().due_date, Some(t0() + Duration::days(1)));
+}
+
+#[test]
+fn snoozed_reminders_ring_again_once() {
+    let mut d = Data::default();
+    let id = d.add_task(draft("a"), t0()).unwrap();
+    d.snooze(id, t0() + Duration::minutes(10), t0()).unwrap();
+    assert!(!d.has_due_reminders(t0() + Duration::minutes(9)));
+    let fired = d.fire_due_reminders(t0() + Duration::minutes(10));
+    assert_eq!(fired.len(), 1);
+    assert!(d.task(id).unwrap().reminder.as_ref().unwrap().snoozed_until.is_none());
+    assert!(!d.has_due_reminders(t0() + Duration::hours(1)));
+}
+
+#[test]
+fn undo_puts_a_deleted_task_back_without_deleting_it_on_the_server() {
+    let mut d = bound();
+    let a = d.add_task(draft("a"), t0()).unwrap();
+    let b = d.add_task(draft("b"), t0()).unwrap();
+    d.remote_ids = vec![a, b];
+    let snapshot = d.task(a).unwrap().clone();
+    tracked(&mut d, |d| d.delete_task(a).unwrap());
+    assert_eq!(d.pending, vec![PendingOp::Delete(a)]);
+    tracked(&mut d, |d| d.restore_task(snapshot, 0));
+    assert_eq!(titles(&d), "ab");
+    assert!(!d.pending.contains(&PendingOp::Delete(a)));
+}
+
+#[test]
+fn undo_restores_a_changed_task() {
+    let mut d = Data::default();
+    let id = d.add_task(TaskDraft { recurrence: Some(Recurrence::Day), due_date: Some(t0()), ..draft("Spor") }, t0()).unwrap();
+    let before = d.task(id).unwrap().clone();
+    d.set_status(id, Status::Completed, t0()).unwrap();
+    d.restore_task(before.clone(), 0);
+    assert_eq!(d.task(id), Some(&before));
+    assert_eq!(d.tasks.len(), 1);
+}
+
+#[test]
+fn rescheduling_keeps_the_time_of_day() {
+    let mut d = Data::default();
+    let id = d.add_task(TaskDraft { due_date: Some(t0()), ..draft("a") }, t0()).unwrap();
+    let day = t0().with_timezone(&chrono::Local).date_naive() + chrono::Days::new(3);
+    d.reschedule(id, day, t0()).unwrap();
+    assert_eq!(d.task(id).unwrap().due_date, Some(t0() + Duration::days(3)));
 }

@@ -1,7 +1,9 @@
 //! The persisted document and every operation on it. Pure: no GPUI, no I/O.
 
-use crate::model::{Group, Notice, PendingOp, Priority, Profile, Reminder, Repeat, Settings, Status, SubTask, Task};
-use crate::reminders;
+use crate::model::{
+    Group, Notice, PendingOp, Priority, Profile, Recurrence, Reminder, Repeat, Settings, Status, SubTask, Task,
+};
+use crate::{recurrence, reminders};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -79,6 +81,7 @@ pub struct TaskDraft {
     pub subtasks: Vec<SubTask>,
     pub group_id: Option<Uuid>,
     pub assignee_id: Option<Uuid>,
+    pub recurrence: Option<Recurrence>,
 }
 
 impl TaskDraft {
@@ -94,6 +97,7 @@ impl TaskDraft {
             subtasks: t.subtasks.clone(),
             group_id: t.group_id,
             assignee_id: t.assignee_id,
+            recurrence: t.recurrence.clone(),
         }
     }
 }
@@ -164,6 +168,7 @@ impl Data {
             owner_id: None,
             group_id: draft.group_id,
             assignee_id: draft.group_id.and(draft.assignee_id),
+            recurrence: draft.recurrence,
         };
         let id = task.id;
         self.tasks.push(task);
@@ -191,17 +196,69 @@ impl Data {
         task.subtasks = draft.subtasks;
         task.group_id = draft.group_id;
         task.assignee_id = draft.group_id.and(draft.assignee_id);
+        task.recurrence = draft.recurrence;
         task.updated_at = now;
+        if task.status == Status::Completed {
+            recur(task, now);
+        }
         Ok(())
     }
 
+    /// Completing a repeating task moves it to its next date instead (see `recur`).
     pub fn set_status(&mut self, id: Uuid, status: Status, now: DateTime<Utc>) -> Result<(), DataError> {
         let task = self.task_mut(id)?;
         if task.status != status {
             task.status = status;
             task.updated_at = now;
+            if status == Status::Completed {
+                recur(task, now);
+            }
         }
         Ok(())
+    }
+
+    pub fn set_priority(&mut self, id: Uuid, priority: Priority, now: DateTime<Utc>) -> Result<(), DataError> {
+        let task = self.task_mut(id)?;
+        if task.priority != priority {
+            task.priority = priority;
+            task.updated_at = now;
+        }
+        Ok(())
+    }
+
+    /// Calendar drag and drop: the task is due on `day`, at its old time of day.
+    pub fn reschedule(&mut self, id: Uuid, day: chrono::NaiveDate, now: DateTime<Utc>) -> Result<(), DataError> {
+        let task = self.task_mut(id)?;
+        let due = recurrence::move_to_day(task.due_date, day);
+        if task.due_date != Some(due) {
+            task.due_date = Some(due);
+            task.updated_at = now;
+        }
+        Ok(())
+    }
+
+    /// "10 dk ertele": the task's reminder rings again at `until`.
+    pub fn snooze(&mut self, id: Uuid, until: DateTime<Utc>, now: DateTime<Utc>) -> Result<(), DataError> {
+        let task = self.task_mut(id)?;
+        match &mut task.reminder {
+            Some(reminder) => reminder.snoozed_until = Some(until),
+            None => task.reminder = Some(Reminder { snoozed_until: Some(until), ..new_reminder(until, Repeat::Once) }),
+        }
+        task.updated_at = now;
+        Ok(())
+    }
+
+    /// "Geri al": puts back a task as it was before a deletion or a change, at `position`.
+    pub fn restore_task(&mut self, task: Task, position: usize) {
+        // A deletion not uploaded yet never needs to reach the server.
+        self.pending.retain(|op| *op != PendingOp::Delete(task.id));
+        match self.tasks.iter_mut().find(|t| t.id == task.id) {
+            Some(current) => *current = task,
+            None => {
+                let at = position.min(self.tasks.len());
+                self.tasks.insert(at, task);
+            }
+        }
     }
 
     pub fn delete_task(&mut self, id: Uuid) -> Result<(), DataError> {
@@ -259,14 +316,20 @@ impl Data {
         due
     }
 
-    /// Advances every due reminder and returns snapshots of the tasks to notify about.
+    /// Advances every due reminder (and ends due snoozes) and returns snapshots of the tasks to
+    /// notify about.
     pub fn fire_due_reminders(&mut self, now: DateTime<Utc>) -> Vec<Task> {
         let due = self.due_reminders(now);
         let mut fired = Vec::new();
         for task in self.tasks.iter_mut().filter(|t| due.contains(&t.id)) {
             fired.push(task.clone());
             if let Some(reminder) = task.reminder.as_mut() {
-                reminders::advance(reminder, now);
+                if reminder.snoozed_until.is_some_and(|at| at <= now) {
+                    reminder.snoozed_until = None;
+                }
+                if reminder.enabled && reminder.next_trigger <= now {
+                    reminders::advance(reminder, now);
+                }
             }
         }
         fired
@@ -457,7 +520,29 @@ fn clean_tags(tags: Vec<String>) -> Vec<String> {
 }
 
 fn new_reminder(at: DateTime<Utc>, repeat: Repeat) -> Reminder {
-    Reminder { date_time: at, repeat, enabled: true, next_trigger: at }
+    Reminder { date_time: at, repeat, enabled: true, next_trigger: at, snoozed_until: None }
+}
+
+/// A repeating task that was just completed goes back to pending at its next date, with its
+/// subtasks unticked and a one-time reminder moved along with the date.
+fn recur(task: &mut Task, now: DateTime<Utc>) {
+    let Some(rule) = task.recurrence.clone() else { return };
+    let next = recurrence::next_due(&rule, task.due_date, now);
+    let shift = task.due_date.map(|due| next - due);
+    task.due_date = Some(next);
+    task.status = Status::Pending;
+    for subtask in &mut task.subtasks {
+        subtask.completed = false;
+    }
+    if let (Some(reminder), Some(shift)) = (task.reminder.as_mut(), shift) {
+        reminder.snoozed_until = None;
+        if reminder.repeat == Repeat::Once {
+            reminder.date_time += shift;
+            reminder.next_trigger = reminder.date_time;
+            reminder.enabled = true;
+        }
+    }
+    task.updated_at = now;
 }
 
 #[cfg(test)]

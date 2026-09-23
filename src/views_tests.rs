@@ -23,6 +23,7 @@ fn task(title: &str, priority: Priority, status: Status, tags: &[&str], due: Opt
         owner_id: None,
         group_id: None,
         assignee_id: None,
+        recurrence: None,
     }
 }
 

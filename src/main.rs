@@ -9,6 +9,7 @@ mod logging;
 mod model;
 mod overlay;
 mod realtime;
+mod recurrence;
 mod reminders;
 mod single_instance;
 mod state;
@@ -54,6 +55,7 @@ fn main() {
         ui::motion::follow_system_setting(cx);
         ui::text_input::bind_keys(cx);
         ui::shell::bind_keys(cx);
+        ui::list::bind_keys(cx);
         let state = AppState::init(dir.join("data.json"), cx);
         let settings = state.read(cx).data.settings.clone();
         autostart::apply(settings.auto_launch);

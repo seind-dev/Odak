@@ -2,7 +2,7 @@
 
 use crate::account;
 use crate::data::{DataError, TaskDraft};
-use crate::model::{Priority, Repeat, Status, SubTask};
+use crate::model::{Priority, Recurrence, Repeat, Status, SubTask};
 use crate::realtime::{self, CommentAdded};
 use crate::state::{AppState, Auth, Page};
 use crate::supabase::{self, Activity, Comment};
@@ -16,7 +16,7 @@ use crate::ui::widgets::{
     button, checkbox, chip, field, icon_chip, page_title, pill, primary_button, segmented, user_avatar, user_name,
 };
 use crate::views;
-use chrono::Utc;
+use chrono::{Datelike, Utc};
 use gpui::{
     App, Context, Div, Entity, FocusHandle, Focusable, FontWeight, IntoElement, Render, Subscription, Window, div, prelude::*,
     px,
@@ -37,6 +37,7 @@ pub struct FormPage {
     repeat: Repeat,
     tags: Vec<String>,
     subtasks: Vec<SubTask>,
+    recurrence: Option<Recurrence>,
     /// `None`: a personal task.
     group: Option<Uuid>,
     assignee: Option<Uuid>,
@@ -128,6 +129,7 @@ impl FormPage {
             repeat: draft.reminder.map_or(Repeat::Once, |(_, repeat)| repeat),
             tags: draft.tags,
             subtasks: draft.subtasks,
+            recurrence: draft.recurrence,
             group: draft.group_id,
             assignee: draft.assignee_id,
             error: None,
@@ -342,6 +344,7 @@ impl FormPage {
             subtasks: self.subtasks.clone(),
             group_id: self.group,
             assignee_id: self.assignee,
+            recurrence: self.recurrence.clone(),
         };
         if draft.title.trim().is_empty() {
             self.error = Some(DataError::EmptyTitle.to_string());
@@ -350,11 +353,17 @@ impl FormPage {
         }
         let editing = self.editing;
         let state = AppState::global(cx);
+        let status = draft.status;
         let result = state.update(cx, |s, cx| {
-            s.mutate(cx, |d| match editing {
+            let before = editing.and_then(|id| s.data.task(id).cloned());
+            let result = s.mutate(cx, |d| match editing {
                 Some(id) => d.update_task(id, draft, Utc::now()),
                 None => d.add_task(draft, Utc::now()).map(|_| ()),
-            })
+            });
+            if let (Ok(()), Some(before)) = (&result, before) {
+                s.offer_undo_if_repeated(before, status, cx);
+            }
+            result
         });
         match result {
             Ok(()) => state.update(cx, |s, cx| s.navigate(Page::List, cx)),
@@ -363,6 +372,82 @@ impl FormPage {
                 cx.notify();
             }
         }
+    }
+
+    /// The "Tekrarla" field: how often, and on which weekdays for a weekly task.
+    fn recurrence_field(&self, c: &Colors, cx: &Context<Self>) -> Div {
+        #[derive(Clone, Copy, PartialEq)]
+        enum Every {
+            Never,
+            Day,
+            Week,
+            Month,
+        }
+        let every = match &self.recurrence {
+            None => Every::Never,
+            Some(Recurrence::Day) => Every::Day,
+            Some(Recurrence::Week { .. }) => Every::Week,
+            Some(Recurrence::Month) => Every::Month,
+        };
+        let this = cx.entity();
+        // A new weekly rule starts on the due date's weekday (or today's).
+        let due_weekday = self
+            .due
+            .read(cx)
+            .value()
+            .unwrap_or_else(Utc::now)
+            .with_timezone(&chrono::Local)
+            .weekday()
+            .num_days_from_monday() as u8;
+        let choice = segmented(
+            "recurrence",
+            &[(Every::Never, "Yok"), (Every::Day, "Her gün"), (Every::Week, "Her hafta"), (Every::Month, "Her ay")],
+            every,
+            c,
+            move |every, _, cx| {
+                this.update(cx, |this, cx| {
+                    this.recurrence = match every {
+                        Every::Never => None,
+                        Every::Day => Some(Recurrence::Day),
+                        Every::Week => Some(Recurrence::Week { days: vec![due_weekday] }),
+                        Every::Month => Some(Recurrence::Month),
+                    };
+                    cx.notify();
+                })
+            },
+        );
+        let weekdays = match &self.recurrence {
+            Some(Recurrence::Week { days }) => Some(days.clone()),
+            _ => None,
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(choice)
+            .when_some(weekdays, |d, days| {
+                let pills = views::WEEKDAYS_TR.iter().enumerate().map(|(ix, name)| {
+                    let day = ix as u8;
+                    pill(("weekday", ix), days.contains(&day), c).child(*name).on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(Recurrence::Week { days }) = &mut this.recurrence {
+                            if days.contains(&day) {
+                                // At least one weekday stays chosen.
+                                if days.len() > 1 {
+                                    days.retain(|d| *d != day);
+                                }
+                            } else {
+                                days.push(day);
+                                days.sort();
+                            }
+                        }
+                        cx.notify();
+                    }))
+                });
+                d.child(motion::appear("weekdays-in", div().flex().flex_wrap().gap_1p5().children(pills), 0., -4.))
+            })
+            .when(self.recurrence.is_some(), |d| {
+                d.child(div().text_xs().text_color(c.muted).child("Tamamlayınca bir sonraki tarihine taşınır ve yeniden beklemeye alınır."))
+            })
     }
 
     /// Moves the task to a group (or back to personal); an assignee outside the group is cleared.
@@ -561,6 +646,7 @@ impl Render for FormPage {
                 .when_some(self.sharing_fields(&c, cx), |d, fields| d.child(fields))
                 .when(self.editing.is_some(), |d| d.child(field("Durum", status, &c)))
                 .child(field("Son tarih", self.due.clone(), &c))
+                .child(field("Tekrarla", self.recurrence_field(&c, cx), &c))
                 .child(field(
                     "Hatırlatıcı",
                     div()

@@ -1,6 +1,6 @@
 //! Thin Supabase client (Auth and REST) on blocking `ureq` calls: run them off the main thread.
 
-use crate::model::{Group, Priority, Profile, Reminder, Status, SubTask, Task};
+use crate::model::{Group, Priority, Profile, Recurrence, Reminder, Status, SubTask, Task};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
@@ -171,6 +171,8 @@ struct TaskRow {
     order: i64,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    #[serde(default)]
+    recurrence: Option<Recurrence>,
 }
 
 impl From<&Task> for TaskRow {
@@ -192,6 +194,7 @@ impl From<&Task> for TaskRow {
             order: t.order,
             created_at: t.created_at,
             updated_at: t.updated_at,
+            recurrence: t.recurrence,
         }
     }
 }
@@ -214,6 +217,7 @@ impl From<TaskRow> for Task {
             owner_id: r.owner_id,
             group_id: r.group_id,
             assignee_id: r.assignee_id,
+            recurrence: r.recurrence,
         }
     }
 }

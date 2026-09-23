@@ -3,12 +3,12 @@
 use crate::model::{Status, Task};
 use crate::state::AppState;
 use crate::theme::{Colors, priority_color, status_color};
+use crate::recurrence;
 use crate::ui::icons;
 use crate::ui::motion;
 use crate::data::Data;
 use crate::ui::widgets::{DraggedTask, chip, icon_chip, page_title, sharing_badges};
 use crate::views;
-use chrono::Utc;
 use gpui::{App, Entity, FontWeight, Hsla, IntoElement, div, prelude::*, px};
 
 pub fn render(c: &Colors, cx: &App) -> impl IntoElement {
@@ -45,9 +45,7 @@ fn column(state: &Entity<AppState>, data: &Data, status: Status, tasks: Vec<&Tas
             let state = state.clone();
             move |drag: &DraggedTask, _, cx| {
                 let id = drag.id;
-                state.update(cx, |s, cx| {
-                    let _ = s.mutate(cx, |d| d.set_status(id, status, Utc::now()));
-                });
+                state.update(cx, |s, cx| s.set_status(id, status, cx));
             }
         })
         .child(
@@ -104,6 +102,7 @@ fn card(state: &Entity<AppState>, data: &Data, t: &Task, c: &Colors) -> impl Int
                 .child(chip(t.priority.label(), priority_color(t.priority)))
                 .items_center()
                 .when_some(t.due_date, |d, due| d.child(icon_chip(icons::CALENDAR, views::format_date(due), c.muted)))
+                .when_some(t.recurrence.as_ref(), |d, rule| d.child(icon_chip(icons::REPEAT, recurrence::label(rule), c.muted)))
                 .children(sharing_badges(data, t, c)),
         );
     motion::enter_once("kanban", (id, t.status), card)

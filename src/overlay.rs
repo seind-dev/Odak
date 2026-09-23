@@ -8,7 +8,7 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{
     DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmSetWindowAttribute,
 };
-use crate::model::{Notice, NoticeKind, Priority, Task};
+use crate::model::{Notice, NoticeKind, Priority, Status, Task};
 use crate::state::AppState;
 use crate::theme::priority_color;
 use crate::ui::icons::{self, icon};
@@ -29,6 +29,9 @@ const HEIGHT: f32 = 92.;
 const MARGIN: f32 = 16.;
 const GAP: f32 = 8.;
 const VISIBLE_FOR: Duration = Duration::from_secs(5);
+/// Reminders have buttons, so they stay longer.
+const REMINDER_VISIBLE_FOR: Duration = Duration::from_secs(12);
+const SNOOZE_FOR: chrono::Duration = chrono::Duration::minutes(10);
 const FADE_OUT: Duration = Duration::from_millis(200);
 
 /// Pop-ups currently on screen, so new ones stack above them.
@@ -44,7 +47,10 @@ pub fn notify(cx: &mut App, notice: Notice) {
         (None, NoticeKind::Update) => priority_color(Priority::Low),
         (None, _) => priority_color(Priority::High),
     };
+    let reminder = notice.kind == NoticeKind::Reminder && notice.task_id.is_some();
     let popup = Popup {
+        visible_for: if reminder { REMINDER_VISIBLE_FOR } else { VISIBLE_FOR },
+        actions: reminder,
         glyph: icons::for_notice(notice.kind),
         title: notice.title.clone().into(),
         body: notice.body.clone().into(),
@@ -106,11 +112,12 @@ fn show(cx: &mut App, popup: Popup) {
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
+    let visible_for = popup.visible_for;
     let opened = cx.open_window(options, |window, cx| {
         square_corners(window);
         let handle = window.window_handle();
         cx.spawn(async move |cx| {
-            cx.background_executor().timer(VISIBLE_FOR - FADE_OUT).await;
+            cx.background_executor().timer(visible_for - FADE_OUT).await;
             if let Some(popup) = handle.downcast::<Popup>() {
                 let _ = popup.update(cx, |popup, _, cx| {
                     popup.closing = true;
@@ -129,6 +136,31 @@ fn show(cx: &mut App, popup: Popup) {
     }
 }
 
+/// A small button on a reminder pop-up: runs `act` and closes the pop-up.
+fn action(id: &'static str, glyph: &'static str, label: &'static str, act: impl Fn(&mut App) + 'static) -> impl IntoElement {
+    let act = std::rc::Rc::new(act);
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .py_0p5()
+        .bg(rgb(0x262626))
+        .text_xs()
+        .text_color(rgb(0xfafafa))
+        .hover(|s| s.bg(rgb(0x333333)))
+        .child(icon(glyph))
+        .child(label)
+        .on_click(move |_, window, cx| {
+            // Not the pop-up's own click, which opens the app.
+            cx.stop_propagation();
+            window.remove_window();
+            let act = act.clone();
+            cx.defer(move |cx| act(cx));
+        })
+}
+
 /// Windows 11 rounds top-level windows and draws its own 1 px frame around them; the pop-up is
 /// a plain square card, so both are turned off.
 fn square_corners(window: &Window) {
@@ -143,6 +175,9 @@ fn square_corners(window: &Window) {
 }
 
 struct Popup {
+    visible_for: Duration,
+    /// A reminder: offers "10 dk" (snooze) and "Tamam" (complete).
+    actions: bool,
     glyph: &'static str,
     title: SharedString,
     body: SharedString,
@@ -185,7 +220,31 @@ impl Render for Popup {
                             .child(self.title.clone()),
                     )
                     .child(div().text_xs().text_color(rgb(0xa3a3a3)).truncate().child(self.body.clone())),
-            );
+            )
+            .when_some(task_id.filter(|_| self.actions), |card, task| {
+                card.child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(action("snooze", icons::SNOOZE, "10 dk", move |cx| {
+                            AppState::global(cx).update(cx, |s, cx| {
+                                let now = Utc::now();
+                                let _ = s.mutate(cx, |d| {
+                                    d.mark_notice_read(notice_id);
+                                    d.snooze(task, now + SNOOZE_FOR, now)
+                                });
+                            })
+                        }))
+                        .child(action("done", icons::CHECK, "Tamam", move |cx| {
+                            AppState::global(cx).update(cx, |s, cx| {
+                                s.mutate(cx, |d| d.mark_notice_read(notice_id));
+                                s.set_status(task, Status::Completed, cx);
+                            })
+                        })),
+                )
+            });
         // Slides in from the screen edge; leaves more quietly than it came.
         let card = if self.closing {
             card.with_animation("fade-out", Animation::new(FADE_OUT).with_easing(quadratic), |el, t| {

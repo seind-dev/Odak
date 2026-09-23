@@ -94,6 +94,19 @@ pub struct Reminder {
     #[serde(default)]
     pub enabled: bool,
     pub next_trigger: DateTime<Utc>,
+    /// "10 dk ertele" from a reminder pop-up: rings once more at this time.
+    #[serde(default)]
+    pub snoozed_until: Option<DateTime<Utc>>,
+}
+
+/// How a task repeats: completing it moves it to its next date instead of closing it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "every", rename_all = "snake_case")]
+pub enum Recurrence {
+    Day,
+    /// On these weekdays (0 = Monday … 6 = Sunday); empty means the due date's weekday.
+    Week { days: Vec<u8> },
+    Month,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -172,6 +185,8 @@ pub struct Task {
     pub group_id: Option<Uuid>,
     #[serde(default)]
     pub assignee_id: Option<Uuid>,
+    #[serde(default)]
+    pub recurrence: Option<Recurrence>,
 }
 
 /// An entry in the upload queue (`Data::pending`). A task has at most one `Upsert` waiting.

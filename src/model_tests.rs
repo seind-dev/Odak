@@ -17,6 +17,7 @@ fn sample_task() -> Task {
         owner_id: None,
         group_id: None,
         assignee_id: None,
+        recurrence: None,
     }
 }
 

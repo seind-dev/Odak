@@ -6,9 +6,10 @@ Windows için hızlı bir görev yöneticisi. Rust ve Zed'in arayüz çatısı [
 
 ## Özellikler
 
-- **Görevler:** öncelik, durum, son tarih, etiketler ve alt görevler. Arama, öncelik ve etiket filtreleri var; sıralamayı sürükle-bırakla değiştirebilirsin.
-- **Kanban, takvim ve özet:** kartı sürükleyerek durumunu değiştir; son tarihleri takvimde gör; bekleyen ve geciken işleri tek ekranda takip et.
-- **Hatırlatıcılar:** bir kez, günlük ya da haftalık. Ekranın köşesinde, yaptığın işi bölmeden (odağı çalmadan) görünür; tıklayınca ilgili görev açılır. Bilgisayar kapalıyken kaçırılanlar açılışta bir kez gösterilir.
+- **Görevler:** öncelik, durum, son tarih, etiketler ve alt görevler. Arama, öncelik ve etiket filtreleri var; sıralamayı sürükle-bırakla değiştirebilirsin. Silinen görevi alttaki "Geri al" ile (ya da Ctrl+Z) geri getirebilirsin.
+- **Tekrarlayan görevler:** her gün, haftanın seçtiğin günleri ya da her ay. Tamamlayınca görev bir sonraki tarihine taşınır ve yeniden beklemeye alınır.
+- **Kanban, takvim ve özet:** kartı sürükleyerek durumunu değiştir; takvimde aylık ya da haftalık görünümde görevleri başka bir güne sürükle, tarihsiz görevleri bir güne bırakarak planla; bekleyen ve geciken işleri tek ekranda takip et.
+- **Hatırlatıcılar:** bir kez, günlük ya da haftalık. Ekranın köşesinde, yaptığın işi bölmeden (odağı çalmadan) görünür; tıklayınca ilgili görev açılır, "10 dk" ile ertelenir ya da "Tamam" ile tamamlanır. Bilgisayar kapalıyken kaçırılanlar açılışta bir kez gösterilir.
 - **Markdown açıklamalar:** önizlemeli yazım; kalın, italik, listeler, yapılacak kutuları, kod ve bağlantılar.
 - **Ctrl+K:** görevlerde arama ve hızlı komutlar.
 - **Hesap ve senkron (isteğe bağlı):** Discord ile giriş yapınca görevlerin hesabına kaydedilir ve giriş yaptığın her bilgisayarda aynı olur. İnternet yokken de çalışır; değişiklikler bağlantı gelince gönderilir.
@@ -35,6 +36,9 @@ Verilerin `%APPDATA%\seindtask\data.json` dosyasında durur. Giriş yaptıysan o
 | Ctrl+B | Kanban |
 | Ctrl+L | Takvim |
 | Ctrl+, | Ayarlar |
+| Ctrl+Z | Son silmeyi ya da tamamlamayı geri al |
+
+Görev listesinde (liste odaktayken): **j/k** ya da **↑/↓** gezin, **Enter** aç, **Boşluk** durumu ilerlet, **1/2/3** öncelik, **Delete** sil, **/** aramaya git.
 
 ## Kaynak koddan derleme
 

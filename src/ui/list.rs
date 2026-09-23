@@ -1,27 +1,63 @@
-//! Task list: search, priority and tag filters, drag to reorder, click to edit, two-click delete.
+//! Task list: search, priority and tag filters, drag to reorder, click to edit, delete with undo.
+//! With the list focused, the keyboard drives it: j/k or arrows move, Enter opens, Space moves
+//! the status on, 1-3 set the priority, Delete deletes, "/" jumps to the search box.
 
 use crate::model::{Priority, Status, Task};
+use crate::recurrence;
 use crate::state::{AppState, Page};
 use crate::theme::{self, Colors, priority_color, status_color};
-use crate::ui::text_input::{TextEvent, TextInput};
 use crate::ui::icons::{self, icon};
 use crate::ui::markdown;
 use crate::ui::motion;
+use crate::ui::text_input::{TextEvent, TextInput};
 use crate::ui::widgets::{DraggedTask, chip, icon_chip, page_title, pill, primary_button, segmented, sharing_badges};
 use crate::views::{self, ListFilter, Scope};
 use chrono::{DateTime, Utc};
 use gpui::{
-    AnyElement, App, Context, Entity, FontWeight, IntoElement, Render, SharedString, Subscription, Window, div,
-    prelude::*, px, white,
+    AnyElement, App, Context, Entity, FocusHandle, Focusable, FontWeight, IntoElement, KeyBinding, Render, ScrollHandle,
+    SharedString, Subscription, Window, actions, div, prelude::*, px, white,
 };
 use uuid::Uuid;
+
+actions!(task_list, [SelectNext, SelectPrevious, OpenSelected, CycleStatus, PriorityHigh, PriorityMedium, PriorityLow, DeleteSelected, FocusSearch]);
+
+const CONTEXT: &str = "TaskList";
+
+/// Keys only act while the list itself has focus, so typing in the search box is unaffected.
+pub fn bind_keys(cx: &mut App) {
+    let ctx = Some(CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("j", SelectNext, ctx),
+        KeyBinding::new("down", SelectNext, ctx),
+        KeyBinding::new("k", SelectPrevious, ctx),
+        KeyBinding::new("up", SelectPrevious, ctx),
+        KeyBinding::new("enter", OpenSelected, ctx),
+        KeyBinding::new("space", CycleStatus, ctx),
+        KeyBinding::new("1", PriorityHigh, ctx),
+        KeyBinding::new("2", PriorityMedium, ctx),
+        KeyBinding::new("3", PriorityLow, ctx),
+        KeyBinding::new("delete", DeleteSelected, ctx),
+        KeyBinding::new("backspace", DeleteSelected, ctx),
+        KeyBinding::new("/", FocusSearch, ctx),
+    ]);
+}
 
 pub struct ListPage {
     filter: ListFilter,
     search: Entity<TextInput>,
-    /// Task whose delete button was clicked once; the second click deletes it.
-    confirm_delete: Option<Uuid>,
+    focus: FocusHandle,
+    /// Keyboard selection (shown while the list has focus).
+    selected: Option<Uuid>,
+    scroll: ScrollHandle,
+    /// Set from the search box (Esc, ↓); applied on the next render, which has the window.
+    focus_requested: bool,
     _subscriptions: Vec<Subscription>,
+}
+
+impl Focusable for ListPage {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
 }
 
 impl ListPage {
@@ -29,22 +65,82 @@ impl ListPage {
         let search = cx.new(|cx| TextInput::new("Ara...", false, cx));
         let state = AppState::global(cx);
         let subscriptions = vec![
-            cx.subscribe(&search, |this, search, event: &TextEvent, cx| {
-                if let TextEvent::Changed = event {
+            cx.subscribe(&search, |this, search, event: &TextEvent, cx| match event {
+                TextEvent::Changed => {
                     this.filter.query = search.read(cx).text().to_string();
                     cx.notify();
                 }
+                // Down or Esc in the search box hands the keyboard to the list.
+                TextEvent::Down | TextEvent::Cancel => {
+                    if this.selected.is_none() {
+                        this.select_by(1, cx);
+                    }
+                    this.focus_requested = true;
+                    cx.notify();
+                }
+                _ => {}
             }),
             cx.observe(&state, |_, _, cx| cx.notify()),
         ];
-        ListPage { filter: ListFilter::default(), search, confirm_delete: None, _subscriptions: subscriptions }
+        ListPage {
+            filter: ListFilter::default(),
+            search,
+            focus: cx.focus_handle(),
+            selected: None,
+            scroll: ScrollHandle::new(),
+            focus_requested: false,
+            _subscriptions: subscriptions,
+        }
     }
 
-    fn card(&self, t: &Task, c: &Colors, now: DateTime<Utc>, cx: &Context<Self>) -> impl IntoElement {
+    fn visible_ids(&self, cx: &App) -> Vec<Uuid> {
+        views::filter_tasks(&AppState::global(cx).read(cx).data.tasks, &self.filter).iter().map(|t| t.id).collect()
+    }
+
+    /// Moves the selection by `step` among the visible tasks (from either end when none is selected).
+    fn select_by(&mut self, step: isize, cx: &mut Context<Self>) {
+        let ids = self.visible_ids(cx);
+        if ids.is_empty() {
+            return;
+        }
+        let last = ids.len() as isize - 1;
+        let at = match self.selected.and_then(|s| ids.iter().position(|id| *id == s)) {
+            Some(at) => (at as isize + step).clamp(0, last),
+            None if step > 0 => 0,
+            None => last,
+        } as usize;
+        self.selected = Some(ids[at]);
+        self.scroll.scroll_to_item(at);
+        cx.notify();
+    }
+
+    /// The selected task, if it is still visible.
+    fn current(&self, cx: &App) -> Option<Uuid> {
+        self.selected.filter(|id| self.visible_ids(cx).contains(id))
+    }
+
+    fn delete_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.current(cx) else { return };
+        let ids = self.visible_ids(cx);
+        let at = ids.iter().position(|i| *i == id).unwrap_or(0);
+        AppState::global(cx).update(cx, |s, cx| s.delete_task(id, cx));
+        // The next task (or the new last one) takes the selection.
+        let ids = self.visible_ids(cx);
+        self.selected = ids.get(at.min(ids.len().saturating_sub(1))).copied();
+        cx.notify();
+    }
+
+    fn set_priority(&mut self, priority: Priority, cx: &mut Context<Self>) {
+        let Some(id) = self.current(cx) else { return };
+        AppState::global(cx).update(cx, |s, cx| {
+            let _ = s.mutate(cx, |d| d.set_priority(id, priority, Utc::now()));
+        });
+    }
+
+    fn card(&self, t: &Task, selected: bool, c: &Colors, now: DateTime<Utc>, cx: &Context<Self>) -> impl IntoElement {
         let id = t.id;
         let state = AppState::global(cx);
         let done = t.status == Status::Completed;
-        let confirming = self.confirm_delete == Some(id);
         let (accent, hover_border) = (c.accent, c.muted);
         let dot = status_color(t.status);
         let next_status = t.status.next();
@@ -62,9 +158,10 @@ impl ListPage {
             .rounded_xl()
             .bg(c.surface)
             .border_1()
-            .border_color(c.border)
+            .border_color(if selected { c.accent } else { c.border })
             .cursor_pointer()
-            .hover(move |s| s.border_color(hover_border))
+            // Always attached (see widgets::segmented); the selection keeps its accent border.
+            .hover(move |s| if selected { s } else { s.border_color(hover_border) })
             .on_click({
                 let state = state.clone();
                 move |_, _, cx| state.update(cx, |s, cx| s.edit(id, cx))
@@ -110,9 +207,7 @@ impl ListPage {
                         let state = state.clone();
                         move |_, _, cx| {
                             cx.stop_propagation();
-                            state.update(cx, |s, cx| {
-                                let _ = s.mutate(cx, |d| d.set_status(id, next_status, Utc::now()));
-                            });
+                            state.update(cx, |s, cx| s.set_status(id, next_status, cx));
                         }
                     }),
             )
@@ -141,6 +236,7 @@ impl ListPage {
                             .when_some(t.due_date, |d, due| {
                                 d.child(icon_chip(icons::CALENDAR, views::format_date(due), if overdue { c.danger } else { c.muted }))
                             })
+                            .when_some(t.recurrence.as_ref(), |d, rule| d.child(icon_chip(icons::REPEAT, recurrence::label(rule), c.muted)))
                             .when_some(t.reminder.as_ref().filter(|r| r.enabled), |d, r| {
                                 d.child(icon_chip(icons::BELL, views::format_date_time(r.next_trigger), c.accent))
                             })
@@ -151,7 +247,8 @@ impl ListPage {
                             .children(badges),
                     ),
             )
-            .child(
+            .child({
+                let (muted, danger, hover) = (c.muted, c.danger, c.hover);
                 div()
                     .id("delete")
                     .flex_none()
@@ -159,43 +256,36 @@ impl ListPage {
                     .py_1()
                     .rounded_md()
                     .text_xs()
+                    .text_color(muted)
                     .cursor_pointer()
-                    .when(confirming, |d| d.bg(c.danger).text_color(white()))
-                    .when(!confirming, |d| d.text_color(c.muted))
-                    .child(motion::appear(
-                        motion::key("delete", confirming),
-                        div().flex().items_center().gap_1().child(icon(icons::TRASH)).when(confirming, |d| d.child("Emin misin?")),
-                        0.,
-                        0.,
-                    ))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .hover(move |s| s.bg(hover).text_color(danger))
+                    .child(icon(icons::TRASH))
+                    .on_click(move |_, _, cx| {
                         cx.stop_propagation();
-                        if this.confirm_delete == Some(id) {
-                            this.confirm_delete = None;
-                            AppState::global(cx).update(cx, |s, cx| {
-                                let _ = s.mutate(cx, |d| d.delete_task(id));
-                            });
-                        } else {
-                            this.confirm_delete = Some(id);
-                        }
-                        cx.notify();
-                    })),
-            );
+                        AppState::global(cx).update(cx, |s, cx| s.delete_task(id, cx));
+                    })
+            });
         motion::enter_once("task", id, card)
     }
 }
 
 impl Render for ListPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if std::mem::take(&mut self.focus_requested) {
+            window.focus(&self.focus, cx);
+        }
         let c = theme::current(cx);
         let state = AppState::global(cx);
         let this = cx.entity();
         let now = Utc::now();
+        let focused = self.focus.contains_focused(window, cx);
         let data = &state.read(cx).data;
         let visible = views::filter_tasks(&data.tasks, &self.filter);
         let tags = views::all_tags(&data.tasks);
         let total = data.tasks.len();
-        let cards: Vec<AnyElement> = visible.iter().map(|t| self.card(t, &c, now, cx).into_any_element()).collect();
+        let selected = self.selected.filter(|_| focused);
+        let cards: Vec<AnyElement> =
+            visible.iter().map(|t| self.card(t, selected == Some(t.id), &c, now, cx).into_any_element()).collect();
 
         let priority_options = [
             (None, "Tümü"),
@@ -267,6 +357,7 @@ impl Render for ListPage {
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .track_scroll(&self.scroll)
                 .flex()
                 .flex_col()
                 .gap_2()
@@ -296,6 +387,48 @@ impl Render for ListPage {
                     .children(tag_chips),
             )
             .child(div().flex().flex_none().flex_wrap().gap_1p5().children(scope_pills))
-            .child(body)
+            .child(
+                // The keyboard target: the cards and their shortcuts, without the search box.
+                div()
+                    .id("list-keys")
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .key_context(CONTEXT)
+                    .track_focus(&self.focus)
+                    .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.select_by(1, cx)))
+                    .on_action(cx.listener(|this, _: &SelectPrevious, _, cx| this.select_by(-1, cx)))
+                    .on_action(cx.listener(|this, _: &OpenSelected, _, cx| {
+                        if let Some(id) = this.current(cx) {
+                            AppState::global(cx).update(cx, |s, cx| s.edit(id, cx));
+                        }
+                    }))
+                    .on_action(cx.listener(|this, _: &CycleStatus, _, cx| {
+                        let Some(id) = this.current(cx) else { return };
+                        let state = AppState::global(cx);
+                        let Some(status) = state.read(cx).data.task(id).map(|t| t.status.next()) else { return };
+                        state.update(cx, |s, cx| s.set_status(id, status, cx));
+                    }))
+                    .on_action(cx.listener(|this, _: &PriorityHigh, _, cx| this.set_priority(Priority::High, cx)))
+                    .on_action(cx.listener(|this, _: &PriorityMedium, _, cx| this.set_priority(Priority::Medium, cx)))
+                    .on_action(cx.listener(|this, _: &PriorityLow, _, cx| this.set_priority(Priority::Low, cx)))
+                    .on_action(cx.listener(|this, _: &DeleteSelected, _, cx| this.delete_selected(cx)))
+                    .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
+                        let search = this.search.read(cx).focus_handle(cx);
+                        window.focus(&search, cx);
+                    }))
+                    .child(body)
+                    .when(focused && !visible.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(c.muted)
+                                .child("↑↓ gezin · Enter aç · Boşluk durum · 1-3 öncelik · Del sil · / ara · Ctrl+Z geri al"),
+                        )
+                    }),
+            )
     }
 }
