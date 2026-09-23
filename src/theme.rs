@@ -1,4 +1,4 @@
-//! Colors for the dark and light themes (the Electron app's Tailwind grays).
+//! Colors for the dark (neutral black and grays) and light themes, from Tailwind's palettes.
 
 use crate::model::{Priority, Status, Theme};
 use crate::state::AppState;
@@ -21,13 +21,14 @@ pub struct Colors {
 pub fn colors(theme: Theme) -> Colors {
     match theme {
         Theme::Dark => Colors {
-            bg: rgb(0x030712),
-            surface: rgb(0x111827),
-            sidebar: rgb(0x0b1120),
-            border: rgb(0x1f2937),
-            hover: rgb(0x1f2937),
-            text: rgb(0xf9fafb),
-            muted: rgb(0x9ca3af),
+            // Neutral black and dark grays (no blue tint).
+            bg: rgb(0x0a0a0a),
+            surface: rgb(0x171717),
+            sidebar: rgb(0x111111),
+            border: rgb(0x262626),
+            hover: rgb(0x262626),
+            text: rgb(0xfafafa),
+            muted: rgb(0xa3a3a3),
             accent: rgb(0x3b82f6),
             danger: rgb(0xef4444),
             selection: rgba(0x3b82f666),

@@ -148,9 +148,9 @@ impl Render for Popup {
                     .flex()
                     .rounded_xl()
                     .overflow_hidden()
-                    .bg(rgb(0x1a1a2e))
+                    .bg(rgb(0x171717))
                     .border_1()
-                    .border_color(rgb(0x2a2a40))
+                    .border_color(rgb(0x2e2e2e))
                     .child(div().w(px(4.)).h_full().flex_none().bg(self.accent))
                     .child(
                         div()
@@ -167,7 +167,7 @@ impl Render for Popup {
                                     .items_center()
                                     .gap_1()
                                     .text_xs()
-                                    .text_color(rgb(0x64748b))
+                                    .text_color(rgb(0x737373))
                                     .child(icon(icons::BELL).text_color(self.accent))
                                     .child(div().font_family(fonts::DISPLAY).child(APP_NAME.to_uppercase())),
                             )
@@ -175,11 +175,11 @@ impl Render for Popup {
                                 div()
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(rgb(0xf1f5f9))
+                                    .text_color(rgb(0xfafafa))
                                     .truncate()
                                     .child(self.title.clone()),
                             )
-                            .child(div().text_xs().text_color(rgb(0x94a3b8)).truncate().child(self.body.clone())),
+                            .child(div().text_xs().text_color(rgb(0xa3a3a3)).truncate().child(self.body.clone())),
                     )
                     .with_animation(
                         "fade-in",
