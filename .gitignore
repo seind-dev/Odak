@@ -1,0 +1,15 @@
+/target
+/Releases
+*.log
+
+# Electron-era files still on disk (ignored, never commit .env)
+.env
+.env.local
+.env.production
+node_modules/
+dist/
+build/
+release/
+.kiro/
+.vscode/
+__pycache__/
