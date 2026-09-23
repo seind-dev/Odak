@@ -269,23 +269,27 @@ fn titlebar(c: &Colors) -> impl IntoElement {
             .child(icon(glyph))
     };
     div()
-        .id("titlebar")
         .flex_none()
         .h(px(32.))
         .flex()
         .items_center()
-        .justify_between()
         .bg(c.sidebar)
         .border_b_1()
         .border_color(c.border)
-        .window_control_area(WindowControlArea::Drag)
+        // The drag area must be a sibling of the buttons, not their parent: GPUI answers the
+        // Windows hit test with the first matching control area in paint order, so a parent
+        // Drag area would win over Min/Max/Close and the buttons would never receive clicks.
         .child(
             div()
+                .id("titlebar-drag")
+                .flex_1()
+                .h_full()
                 .pl_3()
                 .flex()
                 .items_center()
                 .gap_2()
                 .text_xs()
+                .window_control_area(WindowControlArea::Drag)
                 .child(icon(icons::CHECK).size(px(16.)).rounded_sm().bg(c.accent).text_color(white()))
                 .child(div().font_family(fonts::DISPLAY).font_weight(FontWeight::SEMIBOLD).text_color(c.muted).child(APP_NAME)),
         )
