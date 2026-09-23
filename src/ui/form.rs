@@ -1,8 +1,11 @@
 //! Create/edit form for one task.
 
+use crate::account;
 use crate::data::{DataError, TaskDraft};
 use crate::model::{Priority, Repeat, Status, SubTask};
-use crate::state::{AppState, Page};
+use crate::realtime::{self, CommentAdded};
+use crate::state::{AppState, Auth, Page};
+use crate::supabase::{self, Activity, Comment};
 use crate::theme::{self, Colors};
 use crate::ui::datetime_picker::DateTimePicker;
 use crate::ui::icons;
@@ -11,6 +14,7 @@ use crate::ui::text_input::{TextEvent, TextInput};
 use crate::ui::widgets::{
     button, checkbox, chip, field, icon_chip, page_title, pill, primary_button, segmented, user_avatar, user_name,
 };
+use crate::views;
 use chrono::Utc;
 use gpui::{
     App, Context, Div, Entity, FocusHandle, Focusable, FontWeight, IntoElement, Render, Subscription, Window, div, prelude::*,
@@ -38,7 +42,23 @@ pub struct FormPage {
     error: Option<String>,
     /// Description shows rendered Markdown instead of the editor.
     preview: bool,
+    comment_input: Entity<TextInput>,
+    discussion: Discussion,
     _subscriptions: Vec<Subscription>,
+}
+
+/// Comments and history of a task that is on the server (online only, not kept in data.json).
+#[derive(Default)]
+struct Discussion {
+    /// Signed in and the task has been synced.
+    shown: bool,
+    loading: bool,
+    sending: bool,
+    comments: Vec<Comment>,
+    activity: Vec<Activity>,
+    error: Option<String>,
+    /// Own comment whose delete link was clicked once.
+    confirm_delete: Option<Uuid>,
 }
 
 fn text_input(placeholder: &'static str, multiline: bool, text: &str, cx: &mut Context<TextInput>) -> TextInput {
@@ -56,6 +76,7 @@ impl FormPage {
         let description = cx.new(|cx| text_input("Açıklama (isteğe bağlı)", true, &draft.description, cx));
         let tag_input = cx.new(|cx| TextInput::new("Etiket yaz, Enter'a bas", false, cx));
         let subtask_input = cx.new(|cx| TextInput::new("Alt görev yaz, Enter'a bas", false, cx));
+        let comment_input = cx.new(|cx| TextInput::new("Yorum yaz, Enter'a bas", false, cx));
         let due = cx.new(|_| DateTimePicker::new(draft.due_date, false, "Son tarih yok"));
         let reminder = cx.new(|_| DateTimePicker::new(draft.reminder.map(|(at, _)| at), true, "Hatırlatıcı yok"));
         let subscriptions = vec![
@@ -76,10 +97,24 @@ impl FormPage {
                     cx.notify();
                 }
             }),
+            cx.subscribe(&comment_input, |this, _, event: &TextEvent, cx| {
+                if let TextEvent::Submit = event {
+                    this.send_comment(cx);
+                }
+            }),
+            cx.subscribe(&realtime::feed(cx), |this, _, CommentAdded(comment), cx| {
+                if this.editing == Some(comment.task_id) {
+                    this.load_discussion(cx);
+                }
+            }),
         ];
+        let shown = {
+            let s = AppState::global(cx).read(cx);
+            matches!(s.auth, Auth::SignedIn(_)) && editing.is_some_and(|id| s.data.remote_ids.contains(&id))
+        };
         let focus = title.read(cx).focus_handle(cx);
         window.focus(&focus, cx);
-        FormPage {
+        let mut page = FormPage {
             editing,
             title,
             description,
@@ -96,8 +131,170 @@ impl FormPage {
             assignee: draft.assignee_id,
             error: None,
             preview: false,
+            comment_input,
+            discussion: Discussion { shown, ..Default::default() },
             _subscriptions: subscriptions,
+        };
+        page.load_discussion(cx);
+        page
+    }
+
+    fn load_discussion(&mut self, cx: &mut Context<Self>) {
+        let Some(task) = self.editing.filter(|_| self.discussion.shown) else { return };
+        self.discussion.loading = true;
+        let this = cx.weak_entity();
+        account::online(
+            cx,
+            move |session| Ok((supabase::fetch_comments(session, task)?, supabase::fetch_activity(session, task)?)),
+            move |result, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    let d = &mut this.discussion;
+                    d.loading = false;
+                    match result {
+                        Ok((comments, activity)) => {
+                            d.comments = comments;
+                            d.activity = activity;
+                            d.error = None;
+                        }
+                        Err(e) => d.error = Some(e.to_string()),
+                    }
+                    cx.notify();
+                });
+            },
+        );
+    }
+
+    fn send_comment(&mut self, cx: &mut Context<Self>) {
+        let body = self.comment_input.read(cx).text().trim().to_string();
+        let Some(task) = self.editing.filter(|_| self.discussion.shown) else { return };
+        if body.is_empty() || self.discussion.sending {
+            return;
         }
+        self.discussion.sending = true;
+        cx.notify();
+        let this = cx.weak_entity();
+        account::online(cx, move |session| supabase::add_comment(session, task, &body), move |result, cx| {
+            let _ = this.update(cx, |this, cx| {
+                this.discussion.sending = false;
+                match result {
+                    Ok(()) => {
+                        this.comment_input.update(cx, |input, cx| input.set_text("", cx));
+                        this.load_discussion(cx);
+                    }
+                    Err(e) => this.discussion.error = Some(e.to_string()),
+                }
+                cx.notify();
+            });
+        });
+    }
+
+    fn delete_comment(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        if self.discussion.confirm_delete != Some(id) {
+            self.discussion.confirm_delete = Some(id);
+            cx.notify();
+            return;
+        }
+        self.discussion.confirm_delete = None;
+        let this = cx.weak_entity();
+        account::online(cx, move |session| supabase::delete_comment(session, id), move |result, cx| {
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(()) => this.load_discussion(cx),
+                Err(e) => {
+                    this.discussion.error = Some(e.to_string());
+                    cx.notify();
+                }
+            });
+        });
+    }
+
+    fn discussion_view(&self, c: &Colors, cx: &Context<Self>) -> impl IntoElement {
+        let data = &AppState::global(cx).read(cx).data;
+        let me = data.me();
+        let now = Utc::now();
+        let d = &self.discussion;
+        let danger = c.danger;
+        let comments = d.comments.iter().map(|comment| {
+            let id = comment.id;
+            let confirming = d.confirm_delete == Some(id);
+            div()
+                .flex()
+                .items_start()
+                .gap_2()
+                .child(user_avatar(data, comment.user_id, px(24.), c))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(user_name(data, comment.user_id)))
+                                .child(div().text_xs().text_color(c.muted).child(views::time_ago(comment.created_at, now))),
+                        )
+                        .child(div().text_sm().child(comment.body.clone())),
+                )
+                .when(Some(comment.user_id) == me, |row| {
+                    row.child(
+                        div()
+                            .id(id)
+                            .flex_none()
+                            .text_xs()
+                            .cursor_pointer()
+                            .text_color(if confirming { danger } else { c.muted })
+                            .child(if confirming { "Emin misin?" } else { "Sil" })
+                            .on_click(cx.listener(move |this, _, _, cx| this.delete_comment(id, cx))),
+                    )
+                })
+        });
+        let history = d.activity.iter().map(|entry| {
+            let who = entry.user_id.map_or_else(|| "Biri".to_string(), |id| user_name(data, id));
+            let what = views::activity_text(&entry.action, &entry.details, |id| user_name(data, id));
+            div()
+                .flex()
+                .items_start()
+                .gap_2()
+                .child(div().mt(px(7.)).flex_none().size(px(6.)).rounded_full().bg(c.muted))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .child(format!("{who} {what}"))
+                        .child(div().text_xs().text_color(c.muted).child(views::time_ago(entry.created_at, now))),
+                )
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap_5()
+            .pt_5()
+            .border_t_1()
+            .border_color(c.border)
+            .child(field(
+                "Yorumlar",
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .when(d.comments.is_empty() && !d.loading, |list| {
+                        list.child(div().text_sm().text_color(c.muted).child("Henüz yorum yok."))
+                    })
+                    .children(comments)
+                    .child(
+                        div().flex().gap_2().child(div().flex_1().child(self.comment_input.clone())).child(
+                            primary_button("send-comment", if d.sending { "Gönderiliyor..." } else { "Gönder" }, c)
+                                .on_click(cx.listener(|this, _, _, cx| this.send_comment(cx))),
+                        ),
+                    ),
+                c,
+            ))
+            .when_some(d.error.clone(), |col, e| col.child(div().text_sm().text_color(c.danger).child(e)))
+            .when(!d.activity.is_empty(), |col| col.child(field("Etkinlik", div().flex().flex_col().gap_2().children(history), c)))
     }
 
     /// Focus handle of the title input (focused again when the search palette closes over the form).
@@ -388,7 +585,8 @@ impl Render for FormPage {
                         .child(button("cancel", "İptal", &c).on_click(|_, _, cx| {
                             AppState::global(cx).update(cx, |s, cx| s.navigate(Page::List, cx))
                         })),
-                ),
+                )
+                .when(self.discussion.shown, |d| d.child(self.discussion_view(&c, cx))),
         )
     }
 }

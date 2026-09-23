@@ -25,6 +25,12 @@ fn endpoint(path: &str) -> String {
     format!("{}{path}", URL.unwrap_or_default())
 }
 
+/// Realtime websocket address (protocol 1.0.0: JSON messages).
+pub fn realtime_url() -> String {
+    let host = URL.unwrap_or_default().trim_start_matches("https://");
+    format!("wss://{host}/realtime/v1/websocket?apikey={}&vsn=1.0.0", KEY.unwrap_or_default())
+}
+
 static AGENT: LazyLock<Agent> = LazyLock::new(|| {
     Agent::new_with_config(
         Agent::config_builder().http_status_as_error(false).timeout_global(Some(Duration::from_secs(20))).build(),
@@ -303,6 +309,56 @@ pub fn remove_member(session: &Session, group: Uuid, user: Uuid) -> Result<(), E
 pub fn delete_group(session: &Session, group: Uuid) -> Result<(), Error> {
     let request = authorized(AGENT.delete(endpoint("/rest/v1/groups")), session).query("id", format!("eq.{group}"));
     check(request.call()).map(drop)
+}
+
+/// A comment on a task. Online only: not kept in data.json.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Comment {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub user_id: Uuid,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// An entry of a task's history, written by database triggers.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Activity {
+    pub id: i64,
+    pub user_id: Option<Uuid>,
+    pub action: String,
+    #[serde(default)]
+    pub details: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A task's comments, oldest first.
+pub fn fetch_comments(session: &Session, task: Uuid) -> Result<Vec<Comment>, Error> {
+    let request = authorized(AGENT.get(endpoint("/rest/v1/task_comments")), session)
+        .query("select", "id,task_id,user_id,body,created_at")
+        .query("task_id", format!("eq.{task}"))
+        .query("order", "created_at");
+    read_json(request.call())
+}
+
+pub fn add_comment(session: &Session, task: Uuid, body: &str) -> Result<(), Error> {
+    let request = authorized(AGENT.post(endpoint("/rest/v1/task_comments")), session);
+    check(request.send_json(json!({ "task_id": task, "body": body }))).map(drop)
+}
+
+pub fn delete_comment(session: &Session, id: Uuid) -> Result<(), Error> {
+    let request = authorized(AGENT.delete(endpoint("/rest/v1/task_comments")), session).query("id", format!("eq.{id}"));
+    check(request.call()).map(drop)
+}
+
+/// A task's latest history entries, newest first.
+pub fn fetch_activity(session: &Session, task: Uuid) -> Result<Vec<Activity>, Error> {
+    let request = authorized(AGENT.get(endpoint("/rest/v1/task_activity")), session)
+        .query("select", "id,user_id,action,details,created_at")
+        .query("task_id", format!("eq.{task}"))
+        .query("order", "created_at.desc")
+        .query("limit", "30");
+    read_json(request.call())
 }
 
 /// Downloads a file from anywhere (avatars).

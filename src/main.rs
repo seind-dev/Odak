@@ -8,6 +8,7 @@ mod fonts;
 mod logging;
 mod model;
 mod overlay;
+mod realtime;
 mod reminders;
 mod single_instance;
 mod state;
@@ -58,6 +59,7 @@ fn main() {
         autostart::apply(settings.auto_launch);
         account::restore(cx);
         sync::start(cx);
+        realtime::start(cx);
         instance.listen(tray::install(cx));
         if !(minimized || settings.start_minimized) {
             ui::shell::open_main_window(cx);

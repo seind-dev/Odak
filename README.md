@@ -12,6 +12,7 @@ Windows için hızlı bir görev yöneticisi. Rust ve Zed'in arayüz çatısı [
 - **Markdown açıklamalar:** önizlemeli yazım; kalın, italik, listeler, yapılacak kutuları, kod ve bağlantılar.
 - **Ctrl+K:** görevlerde arama ve hızlı komutlar.
 - **Hesap ve senkron (isteğe bağlı):** Discord ile giriş yapınca görevlerin hesabına kaydedilir ve giriş yaptığın her bilgisayarda aynı olur. İnternet yokken de çalışır; değişiklikler bağlantı gelince gönderilir.
+- **Gruplar:** arkadaşlarını Discord kullanıcı adıyla gruba ekle; grup görevlerini herkes görür ve düzenler. Görevi bir üyeye atayabilir, yorum yazabilir ve görevin geçmişini görebilirsin. Değişiklikler ve yorumlar anında gelir; sana görev atandığında ya da görevine yorum yazıldığında bildirim alırsın.
 - **Bildirim geçmişi**, koyu ve açık tema.
 - **Sistem tepsisi:** pencereyi kapatınca tepside çalışmaya devam eder, istersen Windows ile birlikte açılır ve kendini otomatik günceller.
 

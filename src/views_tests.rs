@@ -174,3 +174,15 @@ fn assigned_to_lists_open_tasks_of_that_user() {
     let tasks = vec![open, done, other];
     assert_eq!(assigned_to(&tasks, me).iter().map(|t| t.title.as_str()).collect::<Vec<_>>(), vec!["open"]);
 }
+
+#[test]
+fn activity_lines_use_labels_and_names() {
+    let name = |_| "Ayşe".to_string();
+    assert_eq!(activity_text("created", "Rapor", name), "görevi oluşturdu");
+    assert_eq!(activity_text("status_changed", "pending → in_progress", name), "durumu değiştirdi: Beklemede → Devam Ediyor");
+    assert_eq!(activity_text("priority_changed", "low → high", name), "önceliği değiştirdi: Düşük → Yüksek");
+    let id = Uuid::from_u128(7).to_string();
+    assert_eq!(activity_text("assigned", &id, name), "görevi atadı: Ayşe");
+    assert_eq!(activity_text("assigned", "", name), "atamayı kaldırdı");
+    assert_eq!(activity_text("title_changed", "Yeni ad", name), "başlığı değiştirdi: Yeni ad");
+}

@@ -53,6 +53,32 @@ pub fn all_tags(tasks: &[Task]) -> Vec<String> {
     tags
 }
 
+/// One line of a task's history after the actor's name, e.g. "durumu değiştirdi: Beklemede → Tamamlandı".
+/// `name_of` names the assignee of an `assigned` entry.
+pub fn activity_text(action: &str, details: &str, name_of: impl Fn(Uuid) -> String) -> String {
+    // The server logs codes ("pending → completed"); show their labels.
+    let labels = |label: fn(&str) -> Option<&'static str>| {
+        details.split(" → ").map(|code| label(code).unwrap_or(code)).collect::<Vec<_>>().join(" → ")
+    };
+    match action {
+        "created" => "görevi oluşturdu".into(),
+        "status_changed" => format!("durumu değiştirdi: {}", labels(|code| code_label::<Status>(code).map(Status::label))),
+        "priority_changed" => format!("önceliği değiştirdi: {}", labels(|code| code_label::<Priority>(code).map(Priority::label))),
+        "title_changed" => format!("başlığı değiştirdi: {details}"),
+        "assigned" => match details.parse::<Uuid>() {
+            Ok(id) => format!("görevi atadı: {}", name_of(id)),
+            Err(_) => "atamayı kaldırdı".into(),
+        },
+        "commented" => "yorum yaptı".into(),
+        other => other.into(),
+    }
+}
+
+/// A status or priority from its stored code (`"in_progress"`).
+fn code_label<T: serde::de::DeserializeOwned>(code: &str) -> Option<T> {
+    serde_json::from_value(serde_json::Value::String(code.into())).ok()
+}
+
 /// Open tasks assigned to `me` (Dashboard).
 pub fn assigned_to(tasks: &[Task], me: Uuid) -> Vec<&Task> {
     tasks.iter().filter(|t| t.assignee_id == Some(me) && t.status != Status::Completed).collect()
