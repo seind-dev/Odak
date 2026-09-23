@@ -22,9 +22,14 @@ use model::{Notice, NoticeKind};
 use state::AppState;
 use std::time::Duration;
 
-/// Name shown in the window, tray and pop-ups. The internal id (`seindtask`: data folder, Velopack
-/// package, startup entry, single-instance names) stays fixed so updates and saved data keep working.
+/// Name shown in the window, tray and pop-ups. The internal id (`APP_ID`) stays fixed so updates and
+/// saved data keep working across renames.
 pub const APP_NAME: &str = "Odak";
+
+/// Internal id: data folder, startup entry and single-instance names (the Velopack package id in
+/// release.ps1 matches it). Debug builds get their own id so `cargo run` can run next to an
+/// installed copy without sharing its data or being taken for a second launch of it.
+pub const APP_ID: &str = if cfg!(debug_assertions) { "seindtask-dev" } else { "seindtask" };
 
 /// How often due reminders are checked.
 const REMINDER_POLL: Duration = Duration::from_secs(15);

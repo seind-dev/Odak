@@ -5,9 +5,9 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-/// `%APPDATA%\seindtask` (the working directory if APPDATA is unset).
+/// `%APPDATA%\<APP_ID>` (the working directory if APPDATA is unset).
 pub fn data_dir() -> PathBuf {
-    std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_default().join("seindtask")
+    std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_default().join(crate::APP_ID)
 }
 
 /// Loads the data file. A missing file gives empty data. An unreadable or corrupt file is

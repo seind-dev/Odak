@@ -12,7 +12,7 @@ fn try_apply(enabled: bool) -> Result<(), Box<dyn std::error::Error>> {
     // auto-launch writes "<path> <args>" unquoted, so quote the path for user names with spaces.
     let exe = format!("\"{}\"", std::env::current_exe()?.display());
     let launcher = AutoLaunchBuilder::new()
-        .set_app_name("seindtask")
+        .set_app_name(crate::APP_ID)
         .set_app_path(&exe)
         .set_windows_enable_mode(WindowsEnableMode::CurrentUser)
         .set_args(&["--minimized"])
