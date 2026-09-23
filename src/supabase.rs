@@ -1,8 +1,8 @@
 //! Thin Supabase client (Auth and REST) on blocking `ureq` calls: run them off the main thread.
 
-use crate::model::Profile;
+use crate::model::{Priority, Profile, Reminder, Status, SubTask, Task};
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::fmt;
@@ -47,6 +47,12 @@ impl Error {
     /// The server no longer accepts the session (bad or revoked refresh token).
     pub fn is_auth_rejected(&self) -> bool {
         matches!(self, Error::Status(400 | 401 | 403, _))
+    }
+
+    /// Worth trying again later: no connection, an expired token, rate limiting or a server fault.
+    /// Anything else (403, 404, 409, 400) will fail the same way again.
+    pub fn is_temporary(&self) -> bool {
+        matches!(self, Error::Network(_) | Error::Status(401 | 408 | 429 | 500.., _))
     }
 }
 
@@ -139,6 +145,91 @@ pub fn own_profile(session: &Session) -> Result<Profile, Error> {
         .query("id", format!("eq.{}", session.user_id));
     let rows: Vec<Profile> = read_json(request.call())?;
     rows.into_iter().next().ok_or_else(|| Error::Local("Profil bulunamadı".into()))
+}
+
+/// A row of the `tasks` table. Subtasks and the reminder are stored as the app's own JSON.
+#[derive(Serialize, Deserialize)]
+struct TaskRow {
+    id: Uuid,
+    owner_id: Option<Uuid>,
+    group_id: Option<Uuid>,
+    assignee_id: Option<Uuid>,
+    title: String,
+    description: String,
+    priority: Priority,
+    status: Status,
+    tags: Vec<String>,
+    subtasks: Vec<SubTask>,
+    due_date: Option<DateTime<Utc>>,
+    reminder: Option<Reminder>,
+    order: i64,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<&Task> for TaskRow {
+    fn from(t: &Task) -> Self {
+        let t = t.clone();
+        TaskRow {
+            id: t.id,
+            owner_id: t.owner_id,
+            group_id: t.group_id,
+            assignee_id: t.assignee_id,
+            title: t.title,
+            description: t.description,
+            priority: t.priority,
+            status: t.status,
+            tags: t.tags,
+            subtasks: t.subtasks,
+            due_date: t.due_date,
+            reminder: t.reminder,
+            order: t.order,
+            created_at: t.created_at,
+            updated_at: t.updated_at,
+        }
+    }
+}
+
+impl From<TaskRow> for Task {
+    fn from(r: TaskRow) -> Self {
+        Task {
+            id: r.id,
+            title: r.title,
+            description: r.description,
+            priority: r.priority,
+            status: r.status,
+            reminder: r.reminder,
+            subtasks: r.subtasks,
+            tags: r.tags,
+            order: r.order,
+            due_date: r.due_date,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+            owner_id: r.owner_id,
+            group_id: r.group_id,
+            assignee_id: r.assignee_id,
+        }
+    }
+}
+
+/// Last-write-wins upload through the `upsert_task` function: `Ok(false)` means the server
+/// already had a newer version and kept it.
+pub fn upsert_task(session: &Session, task: &Task) -> Result<bool, Error> {
+    let request = authorized(AGENT.post(endpoint("/rest/v1/rpc/upsert_task")), session);
+    read_json(request.send_json(json!({ "task": TaskRow::from(task) })))
+}
+
+pub fn delete_task(session: &Session, id: Uuid) -> Result<(), Error> {
+    let request = authorized(AGENT.delete(endpoint("/rest/v1/tasks")), session).query("id", format!("eq.{id}"));
+    check(request.call()).map(drop)
+}
+
+/// Every task the user can see (own and group tasks).
+/// Note: the API returns at most 1000 rows per request; page with a Range header if that is ever too few.
+pub fn fetch_tasks(session: &Session) -> Result<Vec<Task>, Error> {
+    let request = authorized(AGENT.get(endpoint("/rest/v1/tasks")), session).query("select", "*");
+    let rows: Vec<TaskRow> = read_json(request.call())?;
+    Ok(rows.into_iter().map(Task::from).collect())
 }
 
 /// Downloads a file from anywhere (avatars).

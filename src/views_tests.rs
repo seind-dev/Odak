@@ -20,6 +20,9 @@ fn task(title: &str, priority: Priority, status: Status, tags: &[&str], due: Opt
         due_date: due,
         created_at: noon(2026, 1, 1),
         updated_at: noon(2026, 1, 1),
+        owner_id: None,
+        group_id: None,
+        assignee_id: None,
     }
 }
 

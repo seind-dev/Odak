@@ -24,6 +24,9 @@ fn task_with(reminder: Option<Reminder>) -> Task {
         due_date: None,
         created_at: at(0, 0),
         updated_at: at(0, 0),
+        owner_id: None,
+        group_id: None,
+        assignee_id: None,
     }
 }
 

@@ -3,10 +3,11 @@
 use crate::account;
 use crate::fonts;
 use crate::model::Profile;
+use crate::state::{AppState, Auth, SyncStatus};
 use crate::theme::Colors;
 use crate::ui::icons::{self, icon};
 use crate::views::{self, WEEKDAYS_TR};
-use chrono::{Datelike, NaiveDate};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use gpui::{
     AnyElement, App, Context, Div, ElementId, FontWeight, Hsla, IntoElement, Pixels, Render, SharedString, Stateful,
     Window, div, img, prelude::*, px, white,
@@ -54,6 +55,27 @@ pub fn avatar(profile: &Profile, size: Pixels, c: &Colors) -> Div {
     div().flex_none().size(size).child(
         img(account::avatar_path(profile.id)).size_full().rounded_full().with_loading(letter.clone()).with_fallback(letter),
     )
+}
+
+/// Cloud glyph and text for the sync state (sidebar and Settings); `None` without an account.
+pub fn sync_label(s: &AppState, now: DateTime<Utc>) -> Option<(&'static str, String)> {
+    s.data.account.as_ref()?;
+    let waiting = s.data.pending.len();
+    let label = match (&s.auth, &s.sync) {
+        (Auth::Waiting(_), _) => return None,
+        (Auth::SignedOut, _) => (icons::CLOUD_DISABLED, "Tekrar giriş gerekli".into()),
+        _ if s.data.needs_account_choice() => (icons::CLOUD_DISABLED, "Senkron bekliyor: Ayarlar'a bak".into()),
+        (_, SyncStatus::Syncing) => (icons::REFRESH, "Senkronize ediliyor...".into()),
+        (_, SyncStatus::Offline) if waiting > 0 => (icons::CLOUD_DISABLED, format!("Çevrimdışı · {waiting} değişiklik bekliyor")),
+        (_, SyncStatus::Offline) => (icons::CLOUD_DISABLED, "Çevrimdışı".into()),
+        (_, SyncStatus::Failed(e)) => (icons::CLOUD_DISABLED, e.clone()),
+        _ if waiting > 0 => (icons::CLOUD, format!("{waiting} değişiklik bekliyor")),
+        _ => match s.data.last_sync {
+            Some(at) => (icons::CLOUD_CHECK, format!("Senkronize · {}", views::time_ago(at, now).replace("Az önce", "az önce"))),
+            None => (icons::CLOUD, "Henüz senkronize edilmedi".into()),
+        },
+    };
+    Some(label)
 }
 
 /// Filled accent button for a page's main action; chain `.on_click(...)`.

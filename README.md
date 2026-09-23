@@ -1,6 +1,6 @@
 # Odak
 
-Windows için hızlı, yerel bir görev yöneticisi. Rust ve Zed'in arayüz çatısı [GPUI](https://www.gpui.rs) ile yazıldı. Hesap ya da internet gerektirmez; görevlerin kendi bilgisayarında kalır.
+Windows için hızlı bir görev yöneticisi. Rust ve Zed'in arayüz çatısı [GPUI](https://www.gpui.rs) ile yazıldı. Hesap gerektirmez: giriş yapmazsan görevlerin yalnızca kendi bilgisayarında kalır. İstersen Discord ile giriş yapıp görevlerini bilgisayarların arasında senkronize edebilirsin.
 
 ![Odak görev listesi](docs/screenshot.png)
 
@@ -11,6 +11,7 @@ Windows için hızlı, yerel bir görev yöneticisi. Rust ve Zed'in arayüz çat
 - **Hatırlatıcılar:** bir kez, günlük ya da haftalık. Ekranın köşesinde, yaptığın işi bölmeden (odağı çalmadan) görünür; tıklayınca ilgili görev açılır. Bilgisayar kapalıyken kaçırılanlar açılışta bir kez gösterilir.
 - **Markdown açıklamalar:** önizlemeli yazım; kalın, italik, listeler, yapılacak kutuları, kod ve bağlantılar.
 - **Ctrl+K:** görevlerde arama ve hızlı komutlar.
+- **Hesap ve senkron (isteğe bağlı):** Discord ile giriş yapınca görevlerin hesabına kaydedilir ve giriş yaptığın her bilgisayarda aynı olur. İnternet yokken de çalışır; değişiklikler bağlantı gelince gönderilir.
 - **Bildirim geçmişi**, koyu ve açık tema.
 - **Sistem tepsisi:** pencereyi kapatınca tepside çalışmaya devam eder, istersen Windows ile birlikte açılır ve kendini otomatik günceller.
 
@@ -20,7 +21,7 @@ Windows için hızlı, yerel bir görev yöneticisi. Rust ve Zed'in arayüz çat
 
 Yükleyici dijital olarak imzalı olmadığı için Windows SmartScreen uyarı gösterebilir: **Ek bilgi → Yine de çalıştır**.
 
-Verilerin `%APPDATA%\seindtask\data.json` dosyasında durur. Uygulamayı kapatmak için tepsi simgesine sağ tıklayıp **Çıkış**'ı seç.
+Verilerin `%APPDATA%\seindtask\data.json` dosyasında durur. Giriş yaptıysan oturumun aynı klasördeki `session.bin` dosyasında, Windows hesabına özel şifrelenmiş olarak saklanır. Uygulamayı kapatmak için tepsi simgesine sağ tıklayıp **Çıkış**'ı seç.
 
 ## Kısayollar
 
@@ -43,7 +44,16 @@ cargo test             # testler
 cargo build --release  # target/release/seindtask.exe
 ```
 
-İlk derleme GPUI'yi de derlediği için birkaç dakika sürer. Yükleyici üretmek için `.\release.ps1` kullanılır; bunun için .NET SDK ve `dotnet tool install -g vpk` gerekir.
+İlk derleme GPUI'yi de derlediği için birkaç dakika sürer.
+
+Hesap özellikleri bir [Supabase](https://supabase.com) projesi kullanır; şema `supabase/migrations` klasöründedir. Proje adresi ve yayınlanabilir anahtar derleme sırasında proje kökündeki `.env` dosyasından okunur:
+
+```
+SUPABASE_URL=https://<proje>.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+```
+
+`.env` yoksa uygulama hesap özellikleri kapalı, tamamen yerel olarak derlenir. Yükleyici üretmek için `.\release.ps1` kullanılır; bunun için .NET SDK ve `dotnet tool install -g vpk` gerekir.
 
 ## Teşekkürler
 

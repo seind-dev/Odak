@@ -14,6 +14,9 @@ fn sample_task() -> Task {
         due_date: None,
         created_at: DateTime::<Utc>::UNIX_EPOCH,
         updated_at: DateTime::<Utc>::UNIX_EPOCH,
+        owner_id: None,
+        group_id: None,
+        assignee_id: None,
     }
 }
 
@@ -28,13 +31,14 @@ fn task_json_is_camel_case_with_snake_case_enums() {
 
 #[test]
 fn minimal_task_json_loads_with_defaults_and_ignores_unknown_fields() {
-    // Later phases add fields (e.g. groupId); files must keep loading both ways.
+    // Later versions add fields; files must keep loading both ways.
     let json = r#"{"id":"00000000-0000-0000-0000-000000000000","title":"A",
-        "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z","groupId":"x"}"#;
+        "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z","futureField":"x"}"#;
     let t: Task = serde_json::from_str(json).unwrap();
     assert_eq!(t.priority, Priority::Low);
     assert_eq!(t.status, Status::Pending);
     assert!(t.tags.is_empty() && t.subtasks.is_empty() && t.reminder.is_none());
+    assert!(t.owner_id.is_none() && t.group_id.is_none() && t.assignee_id.is_none());
 }
 
 #[test]

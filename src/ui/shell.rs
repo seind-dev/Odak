@@ -3,9 +3,11 @@
 use crate::APP_NAME;
 use crate::fonts;
 use crate::state::{AppState, Page};
+use crate::sync;
 use crate::theme::{self, Colors};
 use crate::ui::icons::{self, icon};
 use crate::ui::palette::{PaletteEvent, SearchPalette};
+use crate::ui::widgets::sync_label;
 use crate::ui::{
     calendar::CalendarPage, dashboard, form::FormPage, kanban, list::ListPage, notifications, settings::SettingsPage,
 };
@@ -139,6 +141,7 @@ impl Shell {
         let stats = views::stats(&state.data.tasks, Utc::now());
         let (current, editing) = (state.page, state.editing);
         let unread = state.data.unread_notices();
+        let sync_status = sync_label(state, Utc::now());
         let nav = [
             (Page::Dashboard, icons::APPS, "Dashboard", "Ctrl+D"),
             (Page::List, icons::LIST, "Görevler", ""),
@@ -227,7 +230,30 @@ impl Shell {
                 },
             )))
             .child(
-                div().p_4().text_xs().text_color(c.muted).child(concat!("v", env!("CARGO_PKG_VERSION"))),
+                div()
+                    .p_4()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(c.muted)
+                    .when_some(sync_status, |d, (glyph, label)| {
+                        d.child(
+                            div()
+                                .id("sync-status")
+                                .min_w_0()
+                                .flex()
+                                .items_center()
+                                .gap_1p5()
+                                .cursor_pointer()
+                                .hover(move |s| s.text_color(text))
+                                .child(icon(glyph))
+                                .child(div().truncate().child(label))
+                                .on_click(|_, _, cx| sync::request(cx, sync::NOW)),
+                        )
+                    })
+                    .child(div().flex_none().child(concat!("v", env!("CARGO_PKG_VERSION")))),
             )
     }
 }

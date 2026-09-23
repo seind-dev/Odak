@@ -1,9 +1,10 @@
 //! The persisted document and every operation on it. Pure: no GPUI, no I/O.
 
-use crate::model::{Notice, Priority, Profile, Reminder, Repeat, Settings, Status, SubTask, Task};
+use crate::model::{Notice, PendingOp, Priority, Profile, Reminder, Repeat, Settings, Status, SubTask, Task};
 use crate::reminders;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use uuid::Uuid;
 
@@ -13,7 +14,7 @@ pub const DATA_VERSION: u32 = 1;
 pub const MAX_NOTICES: usize = 100;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Data {
     pub version: u32,
     /// Always sorted by `Task::order`: iteration order is display order.
@@ -23,12 +24,40 @@ pub struct Data {
     pub notices: Vec<Notice>,
     /// The signed-in account. Kept when the session expires, so the app can ask to sign in again.
     pub account: Option<Profile>,
+    /// The account this device's tasks belong to. Stays after signing out, so signing back in with
+    /// the same account carries on where it stopped. `None`: never signed in, nothing is tracked.
+    pub last_account: Option<Uuid>,
+    /// Changes waiting to be uploaded, oldest first.
+    pub pending: Vec<PendingOp>,
+    /// Tasks known to exist on the server (as of the last pull or upload).
+    pub remote_ids: Vec<Uuid>,
+    pub last_sync: Option<DateTime<Utc>>,
 }
 
 impl Default for Data {
     fn default() -> Self {
-        Data { version: DATA_VERSION, tasks: Vec::new(), settings: Settings::default(), notices: Vec::new(), account: None }
+        Data {
+            version: DATA_VERSION,
+            tasks: Vec::new(),
+            settings: Settings::default(),
+            notices: Vec::new(),
+            account: None,
+            last_account: None,
+            pending: Vec::new(),
+            remote_ids: Vec::new(),
+            last_sync: None,
+        }
     }
+}
+
+/// An upload queue entry that a sync turn finished with (sent, found stale or rejected).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sent {
+    pub op: PendingOp,
+    /// The task as it was sent (`Upsert` only).
+    pub snapshot: Option<Task>,
+    /// The server has the task now (an accepted or stale `Upsert`).
+    pub uploaded: bool,
 }
 
 /// What the task form edits. `reminder` is (next trigger, repeat).
@@ -100,6 +129,9 @@ impl Data {
             due_date: draft.due_date,
             created_at: now,
             updated_at: now,
+            owner_id: None,
+            group_id: None,
+            assignee_id: None,
         };
         let id = task.id;
         self.tasks.push(task);
@@ -198,6 +230,141 @@ impl Data {
             }
         }
         fired
+    }
+
+    /// Queues how the tasks changed since `before` for upload, once the device is bound to an account.
+    /// A changed task whose `updated_at` did not move gets a newer one, so the server's
+    /// last-write-wins accepts it. Returns whether anything was queued.
+    pub fn track_changes(&mut self, before: &[Task], now: DateTime<Utc>) -> bool {
+        if self.last_account.is_none() {
+            return false;
+        }
+        let old: HashMap<Uuid, &Task> = before.iter().map(|t| (t.id, t)).collect();
+        let mut queued = false;
+        for task in &mut self.tasks {
+            let prev = old.get(&task.id);
+            if prev.is_some_and(|p| **p == *task) {
+                continue;
+            }
+            if let Some(prev) = prev
+                && task.updated_at <= prev.updated_at
+            {
+                task.updated_at = now.max(prev.updated_at + chrono::Duration::milliseconds(1));
+            }
+            queue_upsert(&mut self.pending, task.id);
+            queued = true;
+        }
+        let current: HashSet<Uuid> = self.tasks.iter().map(|t| t.id).collect();
+        for gone in before.iter().filter(|t| !current.contains(&t.id)) {
+            self.pending.retain(|op| *op != PendingOp::Upsert(gone.id));
+            // Never reached the server: nothing to delete there.
+            if self.remote_ids.contains(&gone.id) && !self.pending.contains(&PendingOp::Delete(gone.id)) {
+                self.pending.push(PendingOp::Delete(gone.id));
+            }
+            queued = true;
+        }
+        queued
+    }
+
+    /// `id` signed in. The first account on this device gets every local task uploaded; the same
+    /// account again just carries on; another account waits for `adopt_local_tasks`, unless there
+    /// is nothing local to decide about.
+    pub fn bind_account(&mut self, id: Uuid) {
+        match self.last_account {
+            Some(last) if last == id => {}
+            None => {
+                self.last_account = Some(id);
+                for task in &self.tasks {
+                    queue_upsert(&mut self.pending, task.id);
+                }
+            }
+            Some(_) if self.tasks.is_empty() => self.start_over(id),
+            Some(_) => {}
+        }
+    }
+
+    /// The signed-in account differs from the one this device's tasks belong to.
+    pub fn needs_account_choice(&self) -> bool {
+        matches!((&self.account, self.last_account), (Some(account), Some(last)) if account.id != last)
+    }
+
+    /// Answers `needs_account_choice`: copy the local tasks into the signed-in account (with new
+    /// ids, so they do not collide with the other account's copies) or remove them from this device.
+    pub fn adopt_local_tasks(&mut self, copy: bool) {
+        let Some(id) = self.account.as_ref().map(|a| a.id) else { return };
+        self.start_over(id);
+        if !copy {
+            self.tasks.clear();
+            return;
+        }
+        for task in &mut self.tasks {
+            task.id = Uuid::new_v4();
+            task.owner_id = None;
+            task.group_id = None;
+            task.assignee_id = None;
+            self.pending.push(PendingOp::Upsert(task.id));
+        }
+    }
+
+    fn start_over(&mut self, account: Uuid) {
+        self.last_account = Some(account);
+        self.pending.clear();
+        self.remote_ids.clear();
+        self.last_sync = None;
+    }
+
+    /// Applies a sync turn: finished uploads leave the queue (unless the task changed again during
+    /// the turn), then the server's tasks replace local ones that have nothing waiting, and tasks
+    /// deleted on the server go away here too. `remote` is `None` when the pull did not get through.
+    pub fn merge_sync(&mut self, sent: &[Sent], remote: Option<Vec<Task>>, now: DateTime<Utc>) {
+        for done in sent {
+            match done.op {
+                PendingOp::Upsert(id) => {
+                    let current = self.tasks.iter().find(|t| t.id == id);
+                    let gone = current.is_none();
+                    if gone || current == done.snapshot.as_ref() {
+                        self.pending.retain(|op| *op != done.op);
+                    }
+                    if done.uploaded {
+                        if !self.remote_ids.contains(&id) {
+                            self.remote_ids.push(id);
+                        }
+                        // Deleted here while its upload was on the way: delete it there as well.
+                        if gone && !self.pending.contains(&PendingOp::Delete(id)) {
+                            self.pending.push(PendingOp::Delete(id));
+                        }
+                    }
+                }
+                PendingOp::Delete(id) => {
+                    self.pending.retain(|op| *op != done.op);
+                    self.remote_ids.retain(|r| *r != id);
+                }
+            }
+        }
+        let Some(remote) = remote else { return };
+        let waiting: HashSet<Uuid> = self.pending.iter().map(|op| op.id()).collect();
+        let on_server: HashSet<Uuid> = remote.iter().map(|t| t.id).collect();
+        let known = &self.remote_ids;
+        self.tasks.retain(|t| on_server.contains(&t.id) || waiting.contains(&t.id) || !known.contains(&t.id));
+        for task in remote {
+            if waiting.contains(&task.id) {
+                continue;
+            }
+            match self.tasks.iter_mut().find(|t| t.id == task.id) {
+                Some(local) => *local = task,
+                None => self.tasks.push(task),
+            }
+        }
+        self.tasks.sort_by_key(|t| t.order);
+        self.remote_ids = on_server.into_iter().collect();
+        self.remote_ids.sort();
+        self.last_sync = Some(now);
+    }
+}
+
+fn queue_upsert(pending: &mut Vec<PendingOp>, id: Uuid) {
+    if !pending.contains(&PendingOp::Upsert(id)) {
+        pending.push(PendingOp::Upsert(id));
     }
 }
 

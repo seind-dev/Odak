@@ -3,9 +3,10 @@
 
 use crate::auth;
 use crate::model::Profile;
-use crate::state::{AppState, Auth};
+use crate::state::{AppState, Auth, SyncStatus};
 use crate::store;
 use crate::supabase::{self, Error, Session};
+use crate::sync;
 use crate::ui::shell::open_main_window;
 use chrono::Utc;
 use futures::channel::oneshot;
@@ -18,7 +19,7 @@ use std::thread;
 use uuid::Uuid;
 
 /// Runs blocking work on its own thread; await the receiver on the main thread.
-fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> oneshot::Receiver<T> {
+pub fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> oneshot::Receiver<T> {
     let (tx, rx) = oneshot::channel();
     thread::spawn(move || {
         let _ = tx.send(work());
@@ -26,8 +27,8 @@ fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> one
     rx
 }
 
-/// At startup: signs back in with the saved refresh token. Offline, the account stays signed in
-/// with a stale session that is refreshed later; a rejected token means "sign in again".
+/// At startup: signed in again with the saved refresh token, offline too. The first sync turn
+/// refreshes the session; if the server rejects it, Settings asks to sign in again.
 pub fn restore(cx: &mut App) {
     if !supabase::enabled() {
         return;
@@ -41,29 +42,10 @@ pub fn restore(cx: &mut App) {
         return; // Settings shows the account with "sign in again"
     };
     state.update(cx, |s, cx| {
-        s.auth = Auth::SignedIn(Session::stale(account.id, token.clone()));
-        cx.notify();
+        s.auth = Auth::SignedIn(Session::stale(account.id, token));
+        // Accounts signed in before tasks were synced are not bound yet.
+        s.apply_remote(cx, |d| d.bind_account(account.id));
     });
-    let work = blocking(move || supabase::refresh(&token).map(establish));
-    cx.spawn(async move |cx| {
-        let Ok(result) = work.await else { return };
-        cx.update(|cx| match result {
-            Ok((session, profile)) => {
-                adopt(session, profile, cx, |auth| matches!(auth, Auth::SignedIn(current) if current.user_id == account.id));
-            }
-            Err(e) if e.is_auth_rejected() => {
-                log::warn!("saved session rejected: {e}");
-                auth::forget_refresh_token();
-                AppState::global(cx).update(cx, |s, cx| {
-                    s.auth = Auth::SignedOut;
-                    s.auth_error = Some("Oturumun süresi doldu, tekrar giriş yap.".into());
-                    cx.notify();
-                });
-            }
-            Err(e) => log::info!("session not refreshed yet: {e}"),
-        });
-    })
-    .detach();
 }
 
 /// Opens Discord sign-in in the browser and waits for it to come back.
@@ -90,19 +72,17 @@ pub fn sign_in(cx: &mut App) {
     let flag = cancel.clone();
     let work = blocking(move || {
         let code = listener.wait_for_code(&flag)?;
-        supabase::exchange_code(&code, &pkce.verifier).map(establish)
+        let session = supabase::exchange_code(&code, &pkce.verifier)?;
+        keep_session(&session);
+        let profile = load_profile(&session, None);
+        Ok::<_, Error>((session, profile))
     });
     cx.spawn(async move |cx| {
         let Ok(result) = work.await else { return };
         cx.update(|cx| {
             let waiting = |auth: &Auth| matches!(auth, Auth::Waiting(f) if Arc::ptr_eq(f, &cancel));
             match result {
-                Ok((session, profile)) => {
-                    let signed_in = adopt(session, profile, cx, waiting);
-                    if signed_in {
-                        open_main_window(cx);
-                    }
-                }
+                Ok((session, profile)) => adopt(session, profile, waiting, cx),
                 Err(Error::Cancelled) => {}
                 Err(e) => AppState::global(cx).update(cx, |s, cx| {
                     if waiting(&s.auth) {
@@ -127,10 +107,73 @@ pub fn cancel_sign_in(cx: &mut App) {
     });
 }
 
-/// Forgets the account on this device and ends its server session in the background.
+/// Makes a new session current if sign-in is still expected (`expected` checks the state);
+/// otherwise the user moved on (cancelled), so the session is ended again.
+fn adopt(session: Session, profile: Option<Profile>, expected: impl Fn(&Auth) -> bool, cx: &mut App) {
+    let state = AppState::global(cx);
+    let adopted = state.update(cx, |s, cx| {
+        if !expected(&s.auth) {
+            return false;
+        }
+        let id = session.user_id;
+        let known = s.data.account.clone().filter(|a| a.id == id);
+        let account = profile.or(known).unwrap_or_else(|| Profile {
+            id,
+            username: String::new(),
+            display_name: String::new(),
+            avatar_url: None,
+        });
+        s.auth = Auth::SignedIn(session.clone());
+        s.auth_error = None;
+        s.mutate(cx, |d| {
+            d.account = Some(account);
+            d.bind_account(id);
+        });
+        true
+    });
+    if adopted {
+        sync::request(cx, sync::NOW);
+        open_main_window(cx);
+    } else {
+        auth::forget_refresh_token();
+        thread::spawn(move || end_server_session(session));
+    }
+}
+
+/// Answers the question Settings asks when another account signs in on this device.
+pub fn adopt_local_tasks(copy: bool, cx: &mut App) {
+    AppState::global(cx).update(cx, |s, cx| s.apply_remote(cx, |d| d.adopt_local_tasks(copy)));
+    sync::request(cx, sync::NOW);
+}
+
+/// Signs out, first asking for a confirmation while changes still wait to be uploaded (and trying
+/// once more to send them).
+pub fn request_sign_out(cx: &mut App) {
+    let state = AppState::global(cx);
+    if state.read(cx).data.pending.is_empty() {
+        return sign_out(cx);
+    }
+    state.update(cx, |s, cx| {
+        s.confirm_sign_out = true;
+        cx.notify();
+    });
+    sync::request(cx, sync::NOW);
+}
+
+pub fn keep_signed_in(cx: &mut App) {
+    AppState::global(cx).update(cx, |s, cx| {
+        s.confirm_sign_out = false;
+        cx.notify();
+    });
+}
+
+/// Forgets the account on this device and ends its server session in the background. The tasks
+/// and their waiting uploads stay: signing back in with the same account sends them.
 pub fn sign_out(cx: &mut App) {
     let session = AppState::global(cx).update(cx, |s, cx| {
         s.auth_error = None;
+        s.confirm_sign_out = false;
+        s.sync = SyncStatus::Idle;
         s.mutate(cx, |d| d.account = None);
         match std::mem::replace(&mut s.auth, Auth::SignedOut) {
             Auth::SignedIn(session) => Some(session),
@@ -157,45 +200,20 @@ fn end_server_session(session: Session) {
     }
 }
 
-/// Background part of every successful sign-in: keep the (rotated) refresh token at once, then
-/// load the profile and its avatar. A missing profile is not fatal.
-fn establish(session: Session) -> (Session, Option<Profile>) {
+/// Saves the refresh token at once: the server rotates it, so the previous one stops working.
+pub fn keep_session(session: &Session) {
     if let Err(e) = auth::save_refresh_token(&session.refresh_token) {
         log::error!("could not save the session: {e}");
     }
-    let profile = supabase::own_profile(&session).map_err(|e| log::warn!("profile unavailable: {e}")).ok();
-    if let Some(profile) = &profile {
-        cache_avatar(profile);
-    }
-    (session, profile)
 }
 
-/// Makes `session` current if the app still expects it (`expected` checks the current state);
-/// otherwise the user moved on (cancelled, signed out), so the session is dropped. Returns whether
-/// it was adopted.
-fn adopt(session: Session, profile: Option<Profile>, cx: &mut App, expected: impl Fn(&Auth) -> bool) -> bool {
-    let state = AppState::global(cx);
-    let adopted = state.update(cx, |s, cx| {
-        if !expected(&s.auth) {
-            return false;
-        }
-        let known = s.data.account.clone().filter(|a| a.id == session.user_id);
-        let account = profile.or(known).unwrap_or_else(|| Profile {
-            id: session.user_id,
-            username: String::new(),
-            display_name: String::new(),
-            avatar_url: None,
-        });
-        s.auth = Auth::SignedIn(session.clone());
-        s.auth_error = None;
-        s.mutate(cx, |d| d.account = Some(account));
-        true
-    });
-    if !adopted {
-        auth::forget_refresh_token();
-        thread::spawn(move || end_server_session(session));
+/// Loads the signed-in user's profile and caches the avatar when it is new or changed. Blocking.
+pub fn load_profile(session: &Session, known_avatar: Option<&str>) -> Option<Profile> {
+    let profile = supabase::own_profile(session).map_err(|e| log::warn!("profile unavailable: {e}")).ok()?;
+    if profile.avatar_url.as_deref() != known_avatar || !avatar_path(profile.id).exists() {
+        cache_avatar(&profile);
     }
-    adopted
+    Some(profile)
 }
 
 /// Where a user's avatar is cached (see `cache_avatar`).

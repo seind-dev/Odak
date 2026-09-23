@@ -184,3 +184,187 @@ fn notices_read_state_and_clear() {
     d.clear_notices();
     assert!(d.notices.is_empty());
 }
+
+// ----- sync: upload queue, account binding, merge -----
+
+fn account(n: u128) -> Profile {
+    Profile { id: Uuid::from_u128(n), username: format!("u{n}"), display_name: String::new(), avatar_url: None }
+}
+
+/// Signed in as account 1 on a device that belongs to it.
+fn bound() -> Data {
+    Data { account: Some(account(1)), last_account: Some(Uuid::from_u128(1)), ..Default::default() }
+}
+
+/// Runs `f` the way `AppState::mutate` does.
+fn tracked(d: &mut Data, f: impl FnOnce(&mut Data)) -> bool {
+    let before = d.tasks.clone();
+    f(d);
+    d.track_changes(&before, t0() + Duration::hours(1))
+}
+
+#[test]
+fn nothing_is_tracked_before_the_first_sign_in() {
+    let mut d = Data::default();
+    assert!(!tracked(&mut d, |d| {
+        d.add_task(draft("a"), t0()).unwrap();
+    }));
+    assert!(d.pending.is_empty());
+}
+
+#[test]
+fn edits_queue_one_upsert_per_task() {
+    let mut d = bound();
+    let mut id = Uuid::nil();
+    tracked(&mut d, |d| id = d.add_task(draft("a"), t0()).unwrap());
+    tracked(&mut d, |d| d.set_status(id, Status::Completed, t0()).unwrap());
+    assert_eq!(d.pending, vec![PendingOp::Upsert(id)]);
+    assert!(!tracked(&mut d, |_| {}), "no change, nothing queued");
+}
+
+#[test]
+fn deleting_an_unsent_task_just_drops_its_upload() {
+    let mut d = bound();
+    let mut id = Uuid::nil();
+    tracked(&mut d, |d| id = d.add_task(draft("a"), t0()).unwrap());
+    tracked(&mut d, |d| d.delete_task(id).unwrap());
+    assert!(d.pending.is_empty());
+}
+
+#[test]
+fn deleting_an_uploaded_task_queues_a_delete() {
+    let mut d = bound();
+    let id = d.add_task(draft("a"), t0()).unwrap();
+    d.remote_ids.push(id);
+    tracked(&mut d, |d| d.delete_task(id).unwrap());
+    assert_eq!(d.pending, vec![PendingOp::Delete(id)]);
+}
+
+#[test]
+fn changes_that_keep_updated_at_get_a_newer_one() {
+    let mut d = bound();
+    let a = d.add_task(draft("a"), t0()).unwrap();
+    let b = d.add_task(draft("b"), t0()).unwrap();
+    tracked(&mut d, |d| d.move_to(b, a).unwrap());
+    assert_eq!(d.pending.len(), 2);
+    assert!(d.tasks.iter().all(|t| t.updated_at > t0()));
+}
+
+#[test]
+fn first_account_uploads_every_local_task() {
+    let mut d = Data::default();
+    let a = d.add_task(draft("a"), t0()).unwrap();
+    d.account = Some(account(1));
+    d.bind_account(Uuid::from_u128(1));
+    assert_eq!((d.last_account, d.pending.clone()), (Some(Uuid::from_u128(1)), vec![PendingOp::Upsert(a)]));
+    assert!(!d.needs_account_choice());
+}
+
+#[test]
+fn same_account_carries_on() {
+    let mut d = bound();
+    d.pending.push(PendingOp::Delete(Uuid::from_u128(9)));
+    d.bind_account(Uuid::from_u128(1));
+    assert_eq!(d.pending, vec![PendingOp::Delete(Uuid::from_u128(9))]);
+}
+
+#[test]
+fn another_account_asks_about_local_tasks() {
+    let mut d = bound();
+    let a = d.add_task(draft("a"), t0()).unwrap();
+    d.remote_ids.push(a);
+    d.account = Some(account(2));
+    d.bind_account(Uuid::from_u128(2));
+    assert!(d.needs_account_choice());
+
+    let mut copy = d.clone();
+    copy.adopt_local_tasks(true);
+    let task = &copy.tasks[0];
+    assert_ne!(task.id, a, "copies get new ids");
+    assert_eq!((copy.last_account, copy.pending.clone()), (Some(Uuid::from_u128(2)), vec![PendingOp::Upsert(task.id)]));
+    assert!(copy.remote_ids.is_empty() && !copy.needs_account_choice());
+
+    d.adopt_local_tasks(false);
+    assert!(d.tasks.is_empty() && d.pending.is_empty() && !d.needs_account_choice());
+}
+
+#[test]
+fn another_account_without_local_tasks_just_switches() {
+    let mut d = bound();
+    d.remote_ids.push(Uuid::from_u128(9));
+    d.account = Some(account(2));
+    d.bind_account(Uuid::from_u128(2));
+    assert!(!d.needs_account_choice());
+    assert!(d.remote_ids.is_empty());
+}
+
+fn remote(d: &Data, id: Uuid, title: &str) -> Task {
+    Task { title: title.into(), ..d.task(id).unwrap().clone() }
+}
+
+#[test]
+fn finished_uploads_leave_the_queue_unless_changed_meanwhile() {
+    let mut d = bound();
+    let a = d.add_task(draft("a"), t0()).unwrap();
+    let b = d.add_task(draft("b"), t0()).unwrap();
+    d.pending = vec![PendingOp::Upsert(a), PendingOp::Upsert(b)];
+    let sent = [a, b].map(|id| Sent { op: PendingOp::Upsert(id), snapshot: d.task(id).cloned(), uploaded: true });
+    d.set_status(b, Status::Completed, t0() + Duration::minutes(1)).unwrap(); // edited during the turn
+    let server = vec![remote(&d, a, "a"), Task { status: Status::Pending, ..remote(&d, b, "b") }];
+    d.merge_sync(&sent, Some(server), t0());
+    assert_eq!(d.pending, vec![PendingOp::Upsert(b)]);
+    assert_eq!(d.task(b).unwrap().status, Status::Completed, "local edit kept while it waits");
+    assert_eq!(d.remote_ids.len(), 2);
+    assert_eq!(d.last_sync, Some(t0()));
+}
+
+#[test]
+fn pull_applies_server_changes_and_deletions() {
+    let mut d = bound();
+    let edited = d.add_task(draft("old"), t0()).unwrap();
+    let deleted = d.add_task(draft("deleted there"), t0()).unwrap();
+    let local = d.add_task(draft("never sent"), t0()).unwrap();
+    d.remote_ids = vec![edited, deleted];
+    let mut new = remote(&d, edited, "new from another device");
+    new.id = Uuid::from_u128(77);
+    let server = vec![remote(&d, edited, "new"), new];
+    d.merge_sync(&[], Some(server), t0());
+    assert_eq!(d.task(edited).unwrap().title, "new");
+    assert!(d.task(deleted).is_none());
+    assert!(d.task(local).is_some(), "local-only tasks stay");
+    assert!(d.task(Uuid::from_u128(77)).is_some());
+}
+
+#[test]
+fn a_task_deleted_during_its_upload_is_deleted_on_the_server_next() {
+    let mut d = bound();
+    let a = d.add_task(draft("a"), t0()).unwrap();
+    let sent = [Sent { op: PendingOp::Upsert(a), snapshot: d.task(a).cloned(), uploaded: true }];
+    let server = vec![remote(&d, a, "a")];
+    d.delete_task(a).unwrap();
+    d.pending.clear(); // what track_changes did: the unsent upload was dropped
+    d.merge_sync(&sent, Some(server), t0());
+    assert_eq!(d.pending, vec![PendingOp::Delete(a)]);
+    assert!(d.task(a).is_none(), "not brought back by the pull");
+}
+
+#[test]
+fn a_failed_pull_keeps_local_tasks() {
+    let mut d = bound();
+    let a = d.add_task(draft("a"), t0()).unwrap();
+    d.remote_ids.push(a);
+    d.pending.push(PendingOp::Delete(Uuid::from_u128(5)));
+    let sent = [Sent { op: PendingOp::Delete(Uuid::from_u128(5)), snapshot: None, uploaded: false }];
+    d.merge_sync(&sent, None, t0());
+    assert!(d.pending.is_empty());
+    assert!(d.task(a).is_some());
+    assert_eq!(d.last_sync, None);
+}
+
+#[test]
+fn old_data_files_load_without_sync_fields() {
+    let d: Data = serde_json::from_str(r#"{"version":1,"tasks":[],"settings":{},"notices":[]}"#).unwrap();
+    assert!(d.last_account.is_none() && d.pending.is_empty() && d.account.is_none());
+    let json = serde_json::to_string(&bound()).unwrap();
+    assert!(json.contains("\"lastAccount\"") && json.contains("\"remoteIds\""));
+}

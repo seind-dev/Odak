@@ -5,9 +5,11 @@ use crate::autostart;
 use crate::model::{Profile, Theme};
 use crate::state::{AppState, Auth};
 use crate::supabase;
+use crate::sync;
 use crate::theme::{self, Colors};
 use crate::ui::icons::{self, icon};
-use crate::ui::widgets::{avatar, button, page_title, primary_button, segmented, toggle};
+use crate::ui::widgets::{avatar, button, page_title, primary_button, segmented, sync_label, toggle};
+use chrono::Utc;
 use crate::updater;
 use gpui::{App, Context, Div, FontWeight, IntoElement, Render, SharedString, Subscription, Window, div, prelude::*, px};
 
@@ -66,7 +68,7 @@ fn section(glyph: &'static str, title: &'static str, c: &Colors) -> Div {
         )
 }
 
-fn row(title: impl Into<SharedString>, description: impl Into<SharedString>, control: impl IntoElement, c: &Colors) -> Div {
+fn row(title: impl IntoElement, description: impl Into<SharedString>, control: impl IntoElement, c: &Colors) -> Div {
     div()
         .flex()
         .items_center()
@@ -77,7 +79,7 @@ fn row(title: impl Into<SharedString>, description: impl Into<SharedString>, con
                 .flex()
                 .flex_col()
                 .gap_0p5()
-                .child(div().text_sm().child(title.into()))
+                .child(div().text_sm().child(title))
                 .child(div().text_xs().text_color(c.muted).child(description.into())),
         )
         .child(control)
@@ -106,7 +108,7 @@ fn account_section(cx: &App, c: &Colors) -> Div {
                 .items_center()
                 .gap_2()
                 .child(icon(icons::SIGN_OUT))
-                .on_click(|_, _, cx| account::sign_out(cx)),
+                .on_click(|_, _, cx| account::request_sign_out(cx)),
             c,
         ),
         (_, Some(profile)) => profile_row(
@@ -122,9 +124,59 @@ fn account_section(cx: &App, c: &Colors) -> Div {
             c,
         ),
     };
+    let signed_in = matches!(state.auth, Auth::SignedIn(_));
+    let waiting = state.data.pending.len();
     section
         .child(body)
         .when_some(state.auth_error.clone(), |d, error| d.child(div().text_sm().text_color(c.danger).child(error)))
+        .when(signed_in && state.data.needs_account_choice(), |d| {
+            d.child(notice(
+                format!(
+                    "Bu cihazda başka bir hesaba ait {} görev var. Bu hesaba kopyalansın mı, yoksa bu cihazdan kaldırılsın mı? \
+                     Kaldırılırlarsa diğer hesapta kalırlar.",
+                    state.data.tasks.len()
+                ),
+                primary_button("copy-tasks", "Kopyala", c).on_click(|_, _, cx| account::adopt_local_tasks(true, cx)),
+                button("drop-tasks", "Bu cihazdan kaldır", c).on_click(|_, _, cx| account::adopt_local_tasks(false, cx)),
+                c,
+            ))
+        })
+        .when(signed_in && state.confirm_sign_out, |d| {
+            let message = if waiting > 0 {
+                format!("{waiting} değişiklik henüz gönderilmedi; aynı hesapla tekrar girişte gönderilecek. Yine de çıkılsın mı?")
+            } else {
+                "Tüm değişiklikler gönderildi. Çıkılsın mı?".to_string()
+            };
+            d.child(notice(
+                message,
+                primary_button("confirm-sign-out", "Çıkış yap", c).on_click(|_, _, cx| account::sign_out(cx)),
+                button("keep-signed-in", "Vazgeç", c).on_click(|_, _, cx| account::keep_signed_in(cx)),
+                c,
+            ))
+        })
+        .when_some(sync_label(state, Utc::now()).filter(|_| signed_in), |d, (glyph, label)| {
+            d.child(row(
+                div().flex().items_center().gap_2().child(icon(glyph).text_color(c.muted)).child(label),
+                "Görevler her değişiklikten sonra ve beş dakikada bir senkronize olur",
+                button("sync-now", "Şimdi senkronize et", c).on_click(|_, _, cx| sync::request(cx, sync::NOW)),
+                c,
+            ))
+        })
+}
+
+/// A question inside a section, with its two answers.
+fn notice(message: String, yes: impl IntoElement, no: impl IntoElement, c: &Colors) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .p_3()
+        .rounded_lg()
+        .border_1()
+        .border_color(c.border)
+        .bg(c.bg)
+        .child(div().text_sm().child(message))
+        .child(div().flex().gap_2().child(yes).child(no))
 }
 
 fn profile_row(profile: &Profile, subtitle: String, control: impl IntoElement, c: &Colors) -> Div {

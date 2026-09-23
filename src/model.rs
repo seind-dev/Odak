@@ -163,6 +163,29 @@ pub struct Task {
     pub due_date: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Account that owns the task on the server; `None` until it is first synced.
+    #[serde(default)]
+    pub owner_id: Option<Uuid>,
+    #[serde(default)]
+    pub group_id: Option<Uuid>,
+    #[serde(default)]
+    pub assignee_id: Option<Uuid>,
+}
+
+/// An entry in the upload queue (`Data::pending`). A task has at most one `Upsert` waiting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", content = "id", rename_all = "snake_case")]
+pub enum PendingOp {
+    Upsert(Uuid),
+    Delete(Uuid),
+}
+
+impl PendingOp {
+    pub fn id(self) -> Uuid {
+        match self {
+            PendingOp::Upsert(id) | PendingOp::Delete(id) => id,
+        }
+    }
 }
 
 /// A user as shown in the app, from the `profiles` table (display only, never for access checks).

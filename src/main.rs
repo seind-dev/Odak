@@ -13,6 +13,7 @@ mod single_instance;
 mod state;
 mod store;
 mod supabase;
+mod sync;
 mod theme;
 mod tray;
 mod ui;
@@ -56,6 +57,7 @@ fn main() {
         let settings = state.read(cx).data.settings.clone();
         autostart::apply(settings.auto_launch);
         account::restore(cx);
+        sync::start(cx);
         instance.listen(tray::install(cx));
         if !(minimized || settings.start_minimized) {
             ui::shell::open_main_window(cx);
