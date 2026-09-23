@@ -2,8 +2,11 @@
 
 use crate::data::Data;
 use crate::store;
+use crate::supabase::Session;
 use gpui::{App, AppContext, Context, Entity, Global};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,6 +20,14 @@ pub enum Page {
     Settings,
 }
 
+/// Account session. Not saved in data.json: the refresh token lives in session.bin (see `auth`).
+pub enum Auth {
+    SignedOut,
+    /// Browser sign-in in progress; setting the flag cancels it.
+    Waiting(Arc<AtomicBool>),
+    SignedIn(Session),
+}
+
 pub struct AppState {
     pub data: Data,
     pub page: Page,
@@ -24,6 +35,9 @@ pub struct AppState {
     pub editing: Option<Uuid>,
     /// Error shown above the page until dismissed (or, for save errors, until a save works).
     pub banner: Option<String>,
+    pub auth: Auth,
+    /// Why the last sign-in or session restore failed, shown in Settings.
+    pub auth_error: Option<String>,
     path: PathBuf,
 }
 
@@ -37,7 +51,7 @@ impl AppState {
     /// Loads `path` and registers the state as a global.
     pub fn init(path: PathBuf, cx: &mut App) -> Entity<AppState> {
         let (data, banner) = store::load(&path);
-        let state = cx.new(|_| AppState { data, page: Page::List, editing: None, banner, path });
+        let state = cx.new(|_| AppState { data, page: Page::List, editing: None, banner, auth: Auth::SignedOut, auth_error: None, path });
         cx.set_global(GlobalState(state.clone()));
         state
     }

@@ -1,13 +1,15 @@
 //! Small stateless building blocks. Stateful widgets live in text_input.rs and datetime_picker.rs.
 
+use crate::account;
 use crate::fonts;
+use crate::model::Profile;
 use crate::theme::Colors;
 use crate::ui::icons::{self, icon};
 use crate::views::{self, WEEKDAYS_TR};
 use chrono::{Datelike, NaiveDate};
 use gpui::{
-    AnyElement, App, Context, Div, ElementId, FontWeight, Hsla, IntoElement, Render, SharedString, Stateful,
-    Window, div, prelude::*, px, white,
+    AnyElement, App, Context, Div, ElementId, FontWeight, Hsla, IntoElement, Pixels, Render, SharedString, Stateful,
+    Window, div, img, prelude::*, px, white,
 };
 use std::rc::Rc;
 use uuid::Uuid;
@@ -29,6 +31,29 @@ pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, c: &Colo
         .cursor_pointer()
         .hover(move |s| s.bg(hover))
         .child(label.into())
+}
+
+/// Round avatar: the cached picture, or the name's first letter on an accent circle until it loads.
+pub fn avatar(profile: &Profile, size: Pixels, c: &Colors) -> Div {
+    let initial: SharedString = profile.name().chars().next().map_or("?".into(), |ch| ch.to_uppercase().collect::<String>()).into();
+    let accent = c.accent;
+    let letter = move || {
+        div()
+            .size_full()
+            .rounded_full()
+            .bg(accent)
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(size * 0.45)
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(white())
+            .child(initial.clone())
+            .into_any_element()
+    };
+    div().flex_none().size(size).child(
+        img(account::avatar_path(profile.id)).size_full().rounded_full().with_loading(letter.clone()).with_fallback(letter),
+    )
 }
 
 /// Filled accent button for a page's main action; chain `.on_click(...)`.

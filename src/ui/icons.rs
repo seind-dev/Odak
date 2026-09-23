@@ -25,8 +25,10 @@ pub const POWER: &str = "\u{fac9}"; // power
 pub const REFRESH: &str = "\u{fb34}"; // refresh
 pub const SEARCH: &str = "\u{fbba}"; // search
 pub const SETTINGS: &str = "\u{fbd2}"; // settings
+pub const SIGN_OUT: &str = "\u{fc0c}"; // sign-out-alt
 pub const TIME_PAST: &str = "\u{fdaa}"; // time-past
 pub const TRASH: &str = "\u{fe17}"; // trash
+pub const USER: &str = "\u{fea0}"; // user
 
 /// One icon glyph; size and color follow the surrounding text (chain `.text_*()` to change them).
 pub fn icon(glyph: &'static str) -> Div {

@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod account;
+mod auth;
 mod autostart;
 mod data;
 mod fonts;
@@ -10,6 +12,7 @@ mod reminders;
 mod single_instance;
 mod state;
 mod store;
+mod supabase;
 mod theme;
 mod tray;
 mod ui;
@@ -52,6 +55,7 @@ fn main() {
         let state = AppState::init(dir.join("data.json"), cx);
         let settings = state.read(cx).data.settings.clone();
         autostart::apply(settings.auto_launch);
+        account::restore(cx);
         instance.listen(tray::install(cx));
         if !(minimized || settings.start_minimized) {
             ui::shell::open_main_window(cx);

@@ -165,6 +165,26 @@ pub struct Task {
     pub updated_at: DateTime<Utc>,
 }
 
+/// A user as shown in the app, from the `profiles` table (display only, never for access checks).
+/// The aliases accept the snake_case the REST API sends.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Profile {
+    pub id: Uuid,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default, alias = "display_name")]
+    pub display_name: String,
+    #[serde(default, alias = "avatar_url")]
+    pub avatar_url: Option<String>,
+}
+
+impl Profile {
+    pub fn name(&self) -> &str {
+        if self.display_name.is_empty() { &self.username } else { &self.display_name }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {

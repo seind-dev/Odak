@@ -1,6 +1,6 @@
 //! The persisted document and every operation on it. Pure: no GPUI, no I/O.
 
-use crate::model::{Notice, Priority, Reminder, Repeat, Settings, Status, SubTask, Task};
+use crate::model::{Notice, Priority, Profile, Reminder, Repeat, Settings, Status, SubTask, Task};
 use crate::reminders;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -21,11 +21,13 @@ pub struct Data {
     pub settings: Settings,
     /// Pop-ups shown so far, newest first (see `record_notice`).
     pub notices: Vec<Notice>,
+    /// The signed-in account. Kept when the session expires, so the app can ask to sign in again.
+    pub account: Option<Profile>,
 }
 
 impl Default for Data {
     fn default() -> Self {
-        Data { version: DATA_VERSION, tasks: Vec::new(), settings: Settings::default(), notices: Vec::new() }
+        Data { version: DATA_VERSION, tasks: Vec::new(), settings: Settings::default(), notices: Vec::new(), account: None }
     }
 }
 

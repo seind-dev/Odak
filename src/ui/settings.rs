@@ -1,13 +1,15 @@
-//! Settings: theme, launch at startup, start minimized, version and update check.
+//! Settings: account, theme, launch at startup, start minimized, version and update check.
 
+use crate::account;
 use crate::autostart;
-use crate::model::Theme;
-use crate::state::AppState;
+use crate::model::{Profile, Theme};
+use crate::state::{AppState, Auth};
+use crate::supabase;
 use crate::theme::{self, Colors};
 use crate::ui::icons::{self, icon};
-use crate::ui::widgets::{button, page_title, segmented, toggle};
+use crate::ui::widgets::{avatar, button, page_title, primary_button, segmented, toggle};
 use crate::updater;
-use gpui::{Context, Div, FontWeight, IntoElement, Render, SharedString, Subscription, Window, div, prelude::*, px};
+use gpui::{App, Context, Div, FontWeight, IntoElement, Render, SharedString, Subscription, Window, div, prelude::*, px};
 
 pub struct SettingsPage {
     update_status: Option<String>,
@@ -64,7 +66,7 @@ fn section(glyph: &'static str, title: &'static str, c: &Colors) -> Div {
         )
 }
 
-fn row(title: impl Into<SharedString>, description: &'static str, control: impl IntoElement, c: &Colors) -> Div {
+fn row(title: impl Into<SharedString>, description: impl Into<SharedString>, control: impl IntoElement, c: &Colors) -> Div {
     div()
         .flex()
         .items_center()
@@ -76,7 +78,76 @@ fn row(title: impl Into<SharedString>, description: &'static str, control: impl 
                 .flex_col()
                 .gap_0p5()
                 .child(div().text_sm().child(title.into()))
-                .child(div().text_xs().text_color(c.muted).child(description)),
+                .child(div().text_xs().text_color(c.muted).child(description.into())),
+        )
+        .child(control)
+}
+
+/// The Hesap section: sign-in button, the waiting state, or the account with sign-out.
+fn account_section(cx: &App, c: &Colors) -> Div {
+    let section = section(icons::USER, "Hesap", c);
+    if !supabase::enabled() {
+        return section.child(div().text_sm().text_color(c.muted).child("Bu sürümde hesap özellikleri kapalı."));
+    }
+    let state = AppState::global(cx);
+    let state = state.read(cx);
+    let body = match (&state.auth, &state.data.account) {
+        (Auth::Waiting(_), _) => row(
+            "Tarayıcıda giriş bekleniyor...",
+            "Discord'da izin verince Odak'a dönülür",
+            button("cancel-sign-in", "İptal", c).on_click(|_, _, cx| account::cancel_sign_in(cx)),
+            c,
+        ),
+        (Auth::SignedIn(_), Some(profile)) => profile_row(
+            profile,
+            format!("@{} · Discord", profile.username),
+            button("sign-out", "Çıkış yap", c)
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(icon(icons::SIGN_OUT))
+                .on_click(|_, _, cx| account::sign_out(cx)),
+            c,
+        ),
+        (_, Some(profile)) => profile_row(
+            profile,
+            "Oturumun sona erdi".into(),
+            primary_button("sign-in", "Tekrar giriş yap", c).on_click(|_, _, cx| account::sign_in(cx)),
+            c,
+        ),
+        _ => row(
+            "Discord ile giriş yap",
+            "Görevlerin hesabına kaydedilir, cihazlar arasında senkronize olur",
+            primary_button("sign-in", "Giriş yap", c).on_click(|_, _, cx| account::sign_in(cx)),
+            c,
+        ),
+    };
+    section
+        .child(body)
+        .when_some(state.auth_error.clone(), |d, error| d.child(div().text_sm().text_color(c.danger).child(error)))
+}
+
+fn profile_row(profile: &Profile, subtitle: String, control: impl IntoElement, c: &Colors) -> Div {
+    let name = if profile.name().is_empty() { "Discord hesabı".to_string() } else { profile.name().to_string() };
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_4()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(avatar(profile, px(40.), c))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(name))
+                        .child(div().text_xs().text_color(c.muted).child(subtitle)),
+                ),
         )
         .child(control)
 }
@@ -115,6 +186,7 @@ impl Render for SettingsPage {
                 .flex_col()
                 .gap_5()
                 .child(page_title("Ayarlar", &c))
+                .child(account_section(cx, &c))
                 .child(section(icons::PALETTE, "Görünüm", &c).child(row("Tema", "Uygulamanın renk teması", theme_choice, &c)))
                 .child(
                     section(icons::POWER, "Başlangıç", &c)
