@@ -1,4 +1,6 @@
-//! "Launch at Windows startup": an HKCU Run entry that starts the app with --minimized.
+//! "Launch at Windows startup": an HKCU Run entry that starts the app. Whether the window shows
+//! at login is the "Küçültülmüş başlat" setting's call, not the entry's (`--minimized` is only for
+//! the updater's restart of an app that was running in the tray).
 
 use auto_launch::{AutoLaunchBuilder, WindowsEnableMode};
 
@@ -15,9 +17,9 @@ fn try_apply(enabled: bool) -> Result<(), Box<dyn std::error::Error>> {
         .set_app_name(crate::APP_ID)
         .set_app_path(&exe)
         .set_windows_enable_mode(WindowsEnableMode::CurrentUser)
-        .set_args(&["--minimized"])
         .build()?;
     if enabled {
+        // Rewritten on every start, which also drops the --minimized of entries from older versions.
         launcher.enable()?;
     } else if launcher.is_enabled()? {
         launcher.disable()?;

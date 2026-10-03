@@ -277,7 +277,7 @@ impl Render for SettingsPage {
                     section(icons::POWER, "Başlangıç", &c)
                         .child(row(
                             "Windows başlangıcında aç",
-                            "Oturum açılınca sistem tepsisinde başlar",
+                            "Oturum açılınca Odak da açılır",
                             auto_launch,
                             &c,
                         ))
