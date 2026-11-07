@@ -1,6 +1,6 @@
 # Odak
 
-Windows için hızlı bir görev yöneticisi. Rust ve Zed'in arayüz çatısı [GPUI](https://www.gpui.rs) ile yazıldı. Hesap gerektirmez: giriş yapmazsan görevlerin yalnızca kendi bilgisayarında kalır. İstersen Discord ile giriş yapıp görevlerini bilgisayarların arasında senkronize edebilirsin.
+Windows ve Linux için hızlı bir görev yöneticisi. Rust ve Zed'in arayüz çatısı [GPUI](https://www.gpui.rs) ile yazıldı. Hesap gerektirmez: giriş yapmazsan görevlerin yalnızca kendi bilgisayarında kalır. İstersen Discord ile giriş yapıp görevlerini bilgisayarların arasında senkronize edebilirsin.
 
 ![Odak görev listesi](docs/screenshot.png)
 
@@ -40,9 +40,24 @@ Verilerin `%APPDATA%\seindtask\data.json` dosyasında durur. Giriş yaptıysan o
 
 Görev listesinde (liste odaktayken): **j/k** ya da **↑/↓** gezin, **Enter** aç, **Boşluk** durumu ilerlet, **1/2/3** öncelik, **Delete** sil, **/** aramaya git.
 
+## Linux
+
+Kaynak koddan kurulur (root gerekmez):
+
+```bash
+tools/install_linux.sh              # derler; ~/.local/bin/odak, menü kaydı ve simge
+tools/install_linux.sh --uninstall  # kaldırır (görevlere dokunmaz)
+```
+
+Güncellemek için `git pull` sonrası betiği yeniden çalıştır; otomatik güncelleme yalnızca Windows'ta var.
+Görevler `~/.local/share/seindtask/data.json` dosyasında, giriş oturumu masaüstünün parola kasasında
+(KWallet, GNOME Keyring) durur. Tepsi simgesi StatusNotifierItem kullanır: KDE'de doğrudan görünür,
+GNOME'da AppIndicator eklentisi gerekir. Wayland ve X11'de çalışır; bildirimler Wayland'de
+layer-shell ile köşeye yerleşir (KDE, Sway, Hyprland; GNOME bu protokolü desteklemez).
+
 ## Kaynak koddan derleme
 
-Gerekenler: Windows ve [Rust](https://rustup.rs) (stable).
+Gerekenler: Windows ya da Linux ve [Rust](https://rustup.rs) (stable).
 
 ```bash
 cargo run              # geliştirme sürümü

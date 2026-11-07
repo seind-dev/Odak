@@ -43,10 +43,12 @@ fn main() {
     // Must run first: handles Velopack install/update hooks and applies downloaded updates.
     velopack::VelopackApp::build().run();
     let dir = store::data_dir();
-    logging::init(&dir);
+    // Before logging starts: a second launch must not rotate the running copy's app.log (Linux
+    // renames files that are open, Windows does not).
     let Some(instance) = single_instance::acquire() else {
         return; // another copy is running and was asked to show its window
     };
+    logging::init(&dir);
     let minimized = std::env::args().any(|arg| arg == "--minimized");
 
     // Explicit: closing the window keeps the app (tray, reminders) running; only "Çıkış" quits.

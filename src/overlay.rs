@@ -3,8 +3,11 @@
 
 use crate::APP_NAME;
 use crate::fonts;
+#[cfg(windows)]
 use raw_window_handle::RawWindowHandle;
+#[cfg(windows)]
 use windows::Win32::Foundation::HWND;
+#[cfg(windows)]
 use windows::Win32::Graphics::Dwm::{
     DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmSetWindowAttribute,
 };
@@ -90,22 +93,28 @@ pub fn startup_alert(cx: &mut App) {
 }
 
 fn show(cx: &mut App, popup: Popup) {
-    let Some(display) = cx.primary_display() else { return };
+    let display = cx.primary_display();
+    // Wayland reports no displays; there the layer-shell surface anchors itself (see `popup_kind`).
+    if display.is_none() && !anchors_itself() {
+        return;
+    }
     let alive = cx.windows();
     let popups = cx.default_global::<OpenPopups>();
     popups.0.retain(|w| alive.contains(w));
     let slot = popups.0.len() as f32;
-    let area = display.visible_bounds();
-    let origin = point(
-        area.origin.x + area.size.width - px(WIDTH + MARGIN),
-        area.origin.y + area.size.height - px(MARGIN + HEIGHT + slot * (HEIGHT + GAP)),
-    );
+    let origin = display.map_or(point(px(0.), px(0.)), |display| {
+        let area = display.visible_bounds();
+        point(
+            area.origin.x + area.size.width - px(WIDTH + MARGIN),
+            area.origin.y + area.size.height - px(MARGIN + HEIGHT + slot * (HEIGHT + GAP)),
+        )
+    });
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(origin, size(px(WIDTH), px(HEIGHT))))),
         titlebar: None,
         focus: false,
         show: true,
-        kind: WindowKind::PopUp,
+        kind: popup_kind(slot),
         is_movable: false,
         is_resizable: false,
         is_minimizable: false,
@@ -163,6 +172,7 @@ fn action(id: &'static str, glyph: &'static str, label: &'static str, act: impl 
 
 /// Windows 11 rounds top-level windows and draws its own 1 px frame around them; the pop-up is
 /// a plain square card, so both are turned off.
+#[cfg(windows)]
 fn square_corners(window: &Window) {
     let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else { return };
     let RawWindowHandle::Win32(win32) = handle.as_raw() else { return };
@@ -173,6 +183,45 @@ fn square_corners(window: &Window) {
         let _ = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &DWMWA_COLOR_NONE as *const _ as *const _, size);
     }
 }
+
+/// Whether pop-ups are placed by the compositor rather than at a computed origin.
+#[cfg(target_os = "linux")]
+fn anchors_itself() -> bool {
+    gpui::guess_compositor() == "Wayland"
+}
+
+#[cfg(not(target_os = "linux"))]
+fn anchors_itself() -> bool {
+    false
+}
+
+/// Windows and X11 place the pop-up at its `window_bounds` origin.
+#[cfg(not(target_os = "linux"))]
+fn popup_kind(_slot: f32) -> WindowKind {
+    WindowKind::PopUp
+}
+
+/// Wayland ignores window positions, so there the pop-up is a layer-shell surface anchored to the
+/// bottom-right corner (the same spot the origin describes elsewhere) that never takes the keyboard.
+#[cfg(target_os = "linux")]
+fn popup_kind(slot: f32) -> WindowKind {
+    use gpui::layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions};
+    if !anchors_itself() {
+        return WindowKind::PopUp;
+    }
+    WindowKind::LayerShell(LayerShellOptions {
+        namespace: format!("{}-popup", crate::APP_ID),
+        layer: Layer::Overlay,
+        anchor: Anchor::BOTTOM | Anchor::RIGHT,
+        margin: Some((px(0.), px(MARGIN), px(MARGIN + slot * (HEIGHT + GAP)), px(0.))),
+        keyboard_interactivity: KeyboardInteractivity::None,
+        ..Default::default()
+    })
+}
+
+/// Elsewhere the pop-up has no system frame to remove.
+#[cfg(not(windows))]
+fn square_corners(_: &Window) {}
 
 struct Popup {
     visible_for: Duration,

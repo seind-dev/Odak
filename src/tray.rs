@@ -1,5 +1,5 @@
 //! Tray icon with "Göster" and "Çıkış". Tray, menu and second-launch events arrive on one channel
-//! that is drained on the GPUI main thread.
+//! that is drained on the GPUI main thread. On Linux the icon is a StatusNotifierItem (KSNI backend).
 
 use crate::APP_NAME;
 use crate::ui::shell::open_main_window;

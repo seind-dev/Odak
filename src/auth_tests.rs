@@ -38,6 +38,7 @@ fn other_requests_are_ignored() {
     assert!(parse_callback("").is_none());
 }
 
+#[cfg(windows)]
 #[test]
 fn dpapi_round_trip() {
     let sealed = protect(b"refresh-token").unwrap();
@@ -65,4 +66,14 @@ fn loopback_waits_for_the_callback_and_honours_cancel() {
     let [favicon, callback] = browser.join().unwrap();
     assert!(favicon.starts_with("HTTP/1.1 404"));
     assert!(callback.starts_with("HTTP/1.1 200") && callback.contains("Giriş tamamlandı"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs the desktop keyring"]
+fn keyring_round_trip() {
+    save_refresh_token("test-token").unwrap();
+    assert_eq!(load_refresh_token().as_deref(), Some("test-token"));
+    forget_refresh_token();
+    assert_eq!(load_refresh_token(), None);
 }

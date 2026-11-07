@@ -1,5 +1,5 @@
 //! Motion: short (about 150–200 ms), ease-out, never bouncing or looping. Keyboard-initiated
-//! changes are left instant by the callers. With Windows' "Animation effects" turned off, GPUI
+//! changes are left instant by the callers. With the system's animations turned off, GPUI
 //! jumps every animation to its end state (see `follow_system_setting`).
 
 use gpui::{
@@ -10,7 +10,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::{Duration, Instant};
+#[cfg(windows)]
 use windows::core::BOOL;
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
 };
@@ -25,6 +27,7 @@ const SNAP: SpringConfig = SpringConfig::new(500.0, 45.0, 1.0);
 
 /// Follows Windows' "Animation effects" setting (Settings → Accessibility → Visual effects).
 /// Cheap; called at startup and periodically so a change applies without a restart.
+#[cfg(windows)]
 pub fn follow_system_setting(cx: &mut App) {
     let mut on = BOOL(1);
     let read = unsafe {
@@ -36,6 +39,33 @@ pub fn follow_system_setting(cx: &mut App) {
         )
     };
     cx.set_reduce_motion(read.is_ok() && !on.as_bool());
+}
+
+/// Linux: KDE's animation speed set to "Instant" (`AnimationDurationFactor=0` in kdeglobals) or GTK
+/// animations turned off (`gtk-enable-animations` in settings.ini, which KDE and GNOME keep in sync).
+/// Two small file reads; called at startup and periodically like the Windows version.
+#[cfg(not(windows))]
+pub fn follow_system_setting(cx: &mut App) {
+    cx.set_reduce_motion(animations_off());
+}
+
+#[cfg(not(windows))]
+fn animations_off() -> bool {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config")));
+    let Some(config) = config else { return false };
+    let value = |file: &str, key: &str| {
+        let text = std::fs::read_to_string(config.join(file)).ok()?;
+        text.lines().find_map(|line| {
+            let (k, v) = line.split_once('=')?;
+            (k.trim() == key).then(|| v.trim().to_owned())
+        })
+    };
+    let kde_instant = value("kdeglobals", "AnimationDurationFactor").and_then(|v| v.parse::<f32>().ok()) == Some(0.0);
+    let gtk_off = matches!(value("gtk-3.0/settings.ini", "gtk-enable-animations").as_deref(), Some("false" | "0"));
+    kde_instant || gtk_off
 }
 
 /// An element id derived from a name and any hashable value.

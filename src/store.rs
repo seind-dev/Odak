@@ -6,8 +6,21 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// `%APPDATA%\<APP_ID>` (the working directory if APPDATA is unset).
+#[cfg(windows)]
 pub fn data_dir() -> PathBuf {
     std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_default().join(crate::APP_ID)
+}
+
+/// `$XDG_DATA_HOME/<APP_ID>`, by default `~/.local/share/<APP_ID>` (the working directory if
+/// neither is set).
+#[cfg(not(windows))]
+pub fn data_dir() -> PathBuf {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .unwrap_or_default();
+    base.join(crate::APP_ID)
 }
 
 /// Loads the data file. A missing file gives empty data. An unreadable or corrupt file is

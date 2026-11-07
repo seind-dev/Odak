@@ -58,6 +58,24 @@ def text_fonts() -> None:
             subset_font(font, unicodes, OUT / f"{family}-{style}.ttf")
 
 
+def add_blank_m(path: Path) -> None:
+    """Maps "m" to an empty glyph. GPUI's Linux text system drops every font without an "m" as
+    unusable, which would leave the icons to whatever system font has these code points (Nerd Fonts
+    share them, so the wrong icons show)."""
+    font = TTFont(path)
+    if 0x6D not in font.getBestCmap():
+        from fontTools.ttLib.tables._g_l_y_f import Glyph
+
+        font.setGlyphOrder(font.getGlyphOrder() + ["m"])
+        font["glyf"].glyphs["m"] = Glyph()
+        font["hmtx"].metrics["m"] = (0, 0)
+        for table in font["cmap"].tables:
+            if table.isUnicode():
+                table.cmap[0x6D] = "m"
+        font.save(path)
+    print(f"{path.relative_to(ROOT)}: blank 'm' for GPUI on Linux")
+
+
 def icon_font() -> None:
     icons_rs = (ROOT / "src" / "ui" / "icons.rs").read_text(encoding="utf-8")
     codepoints = sorted({int(cp, 16) for cp in re.findall(r"\\u\{([0-9a-fA-F]+)\}", icons_rs)})
@@ -65,6 +83,7 @@ def icon_font() -> None:
         member = next(m for m in tar.getmembers() if re.search(r"css/uicons-regular-rounded-\w+\.woff2$", m.name))
         woff2 = tar.extractfile(member).read()
     subset_font(TTFont(io.BytesIO(woff2)), codepoints, OUT / "uicons-regular-rounded.ttf")
+    add_blank_m(OUT / "uicons-regular-rounded.ttf")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 //! Discord sign-in through the default browser: PKCE, a one-shot loopback listener that catches the
-//! redirect, and the refresh token kept on disk encrypted with DPAPI (readable by this Windows user only).
+//! redirect, and the refresh token kept safe: on Windows on disk encrypted with DPAPI (readable by
+//! this Windows user only), on Linux in the desktop's Secret Service (KWallet, GNOME Keyring).
 
 use crate::supabase::Error;
 use base64::Engine;
@@ -7,15 +8,21 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+#[cfg(windows)]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use std::{fs, thread};
+use std::thread;
+#[cfg(windows)]
+use std::fs;
 use uuid::Uuid;
+#[cfg(windows)]
 use windows::Win32::Foundation::{HLOCAL, LocalFree};
+#[cfg(windows)]
 use windows::Win32::Security::Cryptography::{
     CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
 };
+#[cfg(windows)]
 use windows::core::PCWSTR;
 
 const PORT: u16 = 53117;
@@ -114,10 +121,12 @@ pub fn parse_callback(request_line: &str) -> Option<Result<String, Error>> {
     Some(Err(Error::Local(format!("Discord girişi tamamlanamadı: {reason}"))))
 }
 
+#[cfg(windows)]
 fn session_path() -> PathBuf {
     crate::store::data_dir().join("session.bin")
 }
 
+#[cfg(windows)]
 pub fn save_refresh_token(token: &str) -> io::Result<()> {
     let path = session_path();
     if let Some(dir) = path.parent() {
@@ -127,11 +136,13 @@ pub fn save_refresh_token(token: &str) -> io::Result<()> {
 }
 
 /// `None` if there is no saved session or it cannot be decrypted (another user, another machine).
+#[cfg(windows)]
 pub fn load_refresh_token() -> Option<String> {
     let bytes = fs::read(session_path()).ok()?;
     unprotect(&bytes).map_err(|e| log::warn!("session file unreadable: {e}")).ok().and_then(|b| String::from_utf8(b).ok())
 }
 
+#[cfg(windows)]
 pub fn forget_refresh_token() {
     if let Err(e) = fs::remove_file(session_path())
         && e.kind() != io::ErrorKind::NotFound
@@ -140,6 +151,7 @@ pub fn forget_refresh_token() {
     }
 }
 
+#[cfg(windows)]
 fn protect(plain: &[u8]) -> windows::core::Result<Vec<u8>> {
     let input = CRYPT_INTEGER_BLOB { cbData: plain.len() as u32, pbData: plain.as_ptr() as *mut u8 };
     let mut output = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
@@ -149,6 +161,7 @@ fn protect(plain: &[u8]) -> windows::core::Result<Vec<u8>> {
     }
 }
 
+#[cfg(windows)]
 fn unprotect(sealed: &[u8]) -> windows::core::Result<Vec<u8>> {
     let input = CRYPT_INTEGER_BLOB { cbData: sealed.len() as u32, pbData: sealed.as_ptr() as *mut u8 };
     let mut output = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
@@ -159,11 +172,44 @@ fn unprotect(sealed: &[u8]) -> windows::core::Result<Vec<u8>> {
 }
 
 /// Copies out a buffer that DPAPI allocated and frees it.
+#[cfg(windows)]
 unsafe fn take(blob: CRYPT_INTEGER_BLOB) -> Vec<u8> {
     unsafe {
         let bytes = std::slice::from_raw_parts(blob.pbData, blob.cbData as usize).to_vec();
         LocalFree(Some(HLOCAL(blob.pbData.cast())));
         bytes
+    }
+}
+
+/// The Secret Service entry that holds the refresh token.
+#[cfg(target_os = "linux")]
+fn keyring_entry() -> keyring::Result<keyring::Entry> {
+    keyring::Entry::new(crate::APP_ID, "refresh-token")
+}
+
+#[cfg(target_os = "linux")]
+pub fn save_refresh_token(token: &str) -> io::Result<()> {
+    keyring_entry().and_then(|entry| entry.set_password(token)).map_err(io::Error::other)
+}
+
+/// `None` if there is no saved session or the keyring cannot be reached.
+#[cfg(target_os = "linux")]
+pub fn load_refresh_token() -> Option<String> {
+    match keyring_entry().and_then(|entry| entry.get_password()) {
+        Ok(token) => Some(token),
+        Err(keyring::Error::NoEntry) => None,
+        Err(e) => {
+            log::warn!("session unreadable from the keyring: {e}");
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn forget_refresh_token() {
+    match keyring_entry().and_then(|entry| entry.delete_credential()) {
+        Ok(()) | Err(keyring::Error::NoEntry) => {}
+        Err(e) => log::warn!("could not delete the session from the keyring: {e}"),
     }
 }
 

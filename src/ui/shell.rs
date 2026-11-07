@@ -52,6 +52,8 @@ pub fn open_main_window(cx: &mut App) {
             traffic_light_position: None,
         }),
         window_min_size: Some(size(px(760.), px(520.))),
+        // Wayland/X11: matches seindtask.desktop, which gives the window its icon and name.
+        app_id: Some(crate::APP_ID.into()),
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| cx.new(|cx| Shell::new(window, cx))) {
@@ -530,7 +532,9 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &ShowSettings, _, cx| this.go_by_key(Page::Settings, cx)))
             .on_action(cx.listener(|this, _: &OpenSearch, window, cx| this.open_palette(true, window, cx)))
             .on_action(cx.listener(|this, _: &Undo, _, cx| this.state.update(cx, |s, cx| s.undo(cx))))
-            .child(titlebar(&c))
+            // Linux: the desktop draws the frame (server-side decorations); the custom titlebar's
+            // control areas are a Windows hit-test feature.
+            .when(cfg!(windows), |d| d.child(titlebar(&c)))
             .child(
                 div().flex_1().min_h_0().flex().child(self.sidebar(&c, cx)).child(
                     div().flex_1().min_w_0().flex().flex_col().children(banner).child(view),
