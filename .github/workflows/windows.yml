@@ -1,0 +1,64 @@
+# Builds, tests and packs the Windows release on a GitHub-hosted Windows machine (MSVC, the
+# Windows SDK's fxc.exe for GPUI's shaders, and .NET are preinstalled there).
+# Run it from the Actions tab or `gh workflow run windows.yml [-f publish=true]`.
+# Without publish it only uploads the installer as a workflow artifact; with publish it adds the
+# Windows files to the GitHub release of the version in Cargo.toml (merging with the Linux files).
+name: Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload to the GitHub release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-${{ hashFiles('Cargo.lock') }}
+
+      # build.rs bakes the Supabase settings in from .env (never committed).
+      - name: .env from secrets
+        shell: pwsh
+        run: |
+          "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" | Out-File .env -Encoding utf8NoBOM
+          "SUPABASE_PUBLISHABLE_KEY=${{ secrets.SUPABASE_PUBLISHABLE_KEY }}" | Out-File .env -Append -Encoding utf8NoBOM
+
+      - name: Test
+        run: cargo test
+
+      - name: Velopack CLI
+        run: dotnet tool install -g vpk
+
+      - name: Build and pack
+        if: ${{ !inputs.publish }}
+        shell: pwsh
+        run: ./release.ps1
+
+      - name: Build, pack and publish
+        if: ${{ inputs.publish }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./release.ps1 -Publish
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: odak-windows
+          path: Releases/
