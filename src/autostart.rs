@@ -1,6 +1,6 @@
-//! "Launch at Windows startup": an HKCU Run entry that starts the app. Whether the window shows
-//! at login is the "Küçültülmüş başlat" setting's call, not the entry's (`--minimized` is only for
-//! the updater's restart of an app that was running in the tray).
+//! "Launch at startup": an HKCU Run entry on Windows, an XDG autostart entry on Linux. Whether the
+//! window shows at login is the "Küçültülmüş başlat" setting's call, not the entry's (`--minimized`
+//! is only for the updater's restart of an app that was running in the tray).
 
 use auto_launch::{AutoLaunchBuilder, WindowsEnableMode};
 
@@ -12,7 +12,7 @@ pub fn apply(enabled: bool) {
 
 fn try_apply(enabled: bool) -> Result<(), Box<dyn std::error::Error>> {
     // auto-launch writes "<path> <args>" unquoted, so quote the path for user names with spaces.
-    let exe = format!("\"{}\"", std::env::current_exe()?.display());
+    let exe = format!("\"{}\"", launcher_path()?.display());
     let launcher = AutoLaunchBuilder::new()
         .set_app_name(crate::APP_ID)
         .set_app_path(&exe)
@@ -25,4 +25,13 @@ fn try_apply(enabled: bool) -> Result<(), Box<dyn std::error::Error>> {
         launcher.disable()?;
     }
     Ok(())
+}
+
+/// The file to start. Inside an AppImage `current_exe` is a temporary mount that is gone after a
+/// reboot, so the AppImage itself (which its runtime puts in `APPIMAGE`) is started instead.
+fn launcher_path() -> std::io::Result<std::path::PathBuf> {
+    match std::env::var_os("APPIMAGE").filter(|path| !path.is_empty()) {
+        Some(path) if cfg!(target_os = "linux") => Ok(path.into()),
+        _ => std::env::current_exe(),
+    }
 }
