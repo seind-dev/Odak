@@ -42,14 +42,16 @@ Görev listesinde (liste odaktayken): **j/k** ya da **↑/↓** gezin, **Enter**
 
 ## Linux
 
-Kaynak koddan kurulur (root gerekmez):
+[Son sürüm](https://github.com/seind-dev/Odak/releases/latest) sayfasından `seindtask.AppImage` dosyasını indir, çalıştırılabilir yap (`chmod +x seindtask.AppImage`) ve aç. Yeni sürümleri kendisi indirip kurar.
+
+Kaynak koddan da kurulabilir (root gerekmez):
 
 ```bash
 tools/install_linux.sh              # derler; ~/.local/bin/odak, menü kaydı ve simge
 tools/install_linux.sh --uninstall  # kaldırır (görevlere dokunmaz)
 ```
 
-Güncellemek için `git pull` sonrası betiği yeniden çalıştır; otomatik güncelleme yalnızca Windows'ta var.
+Kaynaktan kurulan sürümü güncellemek için `git pull` sonrası betiği yeniden çalıştır; otomatik güncelleme AppImage'da var.
 Görevler `~/.local/share/seindtask/data.json` dosyasında, giriş oturumu masaüstünün parola kasasında
 (KWallet, GNOME Keyring) durur. Tepsi simgesi StatusNotifierItem kullanır: KDE'de doğrudan görünür,
 GNOME'da AppIndicator eklentisi gerekir. Wayland ve X11'de çalışır; bildirimler Wayland'de
@@ -62,8 +64,10 @@ Gerekenler: Windows ya da Linux ve [Rust](https://rustup.rs) (stable).
 ```bash
 cargo run              # geliştirme sürümü
 cargo test             # testler
-cargo build --release  # target/release/seindtask.exe
+cargo build --release  # target/release/seindtask(.exe)
 ```
+
+Sürüm çıkarmak: Windows'ta `release.ps1 -Publish`, Linux'ta `./release.sh --publish` (AppImage). İkisi aynı GitHub sürümünde birleşir; hangisi önce çalışırsa sürümü o açar.
 
 İlk derleme GPUI'yi de derlediği için birkaç dakika sürer.
 
